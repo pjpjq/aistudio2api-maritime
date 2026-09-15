@@ -37,6 +37,9 @@ type responsesTool struct {
 	Name              string          `json:"name,omitempty"`
 	Description       string          `json:"description,omitempty"`
 	Parameters        json.RawMessage `json:"parameters,omitempty"`
+	Tools             []responsesTool `json:"tools,omitempty"`
+	Format            json.RawMessage `json:"format,omitempty"`
+	Execution         string          `json:"execution,omitempty"`
 	SearchContextSize string          `json:"search_context_size,omitempty"`
 	UserLocation      json.RawMessage `json:"user_location,omitempty"`
 	Filters           json.RawMessage `json:"filters,omitempty"`
@@ -50,9 +53,66 @@ type responsesInputItem struct {
 	Content          json.RawMessage `json:"content"`
 	CallID           string          `json:"call_id"`
 	Name             string          `json:"name"`
+	Namespace        string          `json:"namespace"`
 	Arguments        string          `json:"arguments"`
+	Input            string          `json:"input"`
 	Output           json.RawMessage `json:"output"`
 	EncryptedContent string          `json:"encrypted_content"`
+	Tools            []responsesTool `json:"tools"`
+}
+
+type responsesToolIdentity struct {
+	Name      string
+	Namespace string
+	Type      string
+}
+
+func (request responsesRequest) allTools() []responsesTool {
+	tools := append([]responsesTool(nil), request.Tools...)
+	var items []responsesInputItem
+	if json.Unmarshal(request.Input, &items) != nil {
+		return tools
+	}
+	for _, item := range items {
+		if item.Type == "additional_tools" {
+			tools = append(tools, item.Tools...)
+		}
+	}
+	return tools
+}
+
+func qualifyResponsesToolName(namespace, name string) string {
+	namespace = strings.TrimSpace(namespace)
+	name = strings.TrimSpace(name)
+	if namespace == "" || name == "" || name == namespace || strings.HasPrefix(name, namespace+"__") {
+		return name
+	}
+	return namespace + "__" + name
+}
+
+func (request responsesRequest) toolIdentity(qualifiedName string) responsesToolIdentity {
+	identities := make(map[string]responsesToolIdentity)
+	collectResponsesToolIdentities(identities, request.allTools(), "", true)
+	return identities[qualifiedName]
+}
+
+func collectResponsesToolIdentities(identities map[string]responsesToolIdentity, tools []responsesTool, namespace string, direct bool) {
+	for _, tool := range tools {
+		switch tool.Type {
+		case "function", "custom":
+			qualifiedName := qualifyResponsesToolName(namespace, tool.Name)
+			if qualifiedName == "" {
+				continue
+			}
+			if _, exists := identities[qualifiedName]; !exists || direct {
+				identities[qualifiedName] = responsesToolIdentity{Name: tool.Name, Namespace: namespace, Type: tool.Type}
+			}
+		case "namespace":
+			collectResponsesToolIdentities(identities, tool.Tools, qualifyResponsesToolName(namespace, tool.Name), false)
+		case "tool_search":
+			identities["tool_search"] = responsesToolIdentity{Name: "tool_search", Type: "tool_search"}
+		}
+	}
 }
 
 type responseState struct {
@@ -252,7 +312,7 @@ func (request responsesRequest) toGenerateRequest(id string) (aistudio.GenerateR
 		instructions = append(instructions, request.Instructions)
 	}
 	instructions = append(instructions, inlineInstructions...)
-	tools, err := mapResponsesTools(request.Tools, request.ToolChoice)
+	tools, err := mapResponsesTools(request.allTools(), request.ToolChoice)
 	if err != nil {
 		return aistudio.GenerateRequest{}, nil, err
 	}
@@ -345,10 +405,19 @@ func responsesContents(raw json.RawMessage) ([]aistudio.Content, []string, error
 				return nil, nil, fmt.Errorf("function_call arguments must be JSON")
 			}
 			contents = append(contents, aistudio.Content{Role: aistudio.RoleAssistant, Parts: []aistudio.Part{{FunctionCall: &aistudio.FunctionCall{
-				ID: item.CallID, Name: item.Name, Arguments: arguments, ThoughtSignature: pendingSignature,
+				ID: item.CallID, Name: qualifyResponsesToolName(item.Namespace, item.Name), Arguments: arguments, ThoughtSignature: pendingSignature,
 			}}}})
 			pendingSignature = ""
-		case "function_call_output":
+		case "custom_tool_call":
+			arguments, err := json.Marshal(map[string]string{"input": item.Input})
+			if err != nil {
+				return nil, nil, fmt.Errorf("custom_tool_call input: %w", err)
+			}
+			contents = append(contents, aistudio.Content{Role: aistudio.RoleAssistant, Parts: []aistudio.Part{{FunctionCall: &aistudio.FunctionCall{
+				ID: item.CallID, Name: qualifyResponsesToolName(item.Namespace, item.Name), Arguments: arguments, ThoughtSignature: pendingSignature,
+			}}}})
+			pendingSignature = ""
+		case "function_call_output", "custom_tool_call_output":
 			pendingSignature = ""
 			output, err := normalizeFunctionResultContent(item.Output)
 			if err != nil {
@@ -357,6 +426,17 @@ func responsesContents(raw json.RawMessage) ([]aistudio.Content, []string, error
 			contents = append(contents, aistudio.Content{Role: aistudio.RoleTool, Parts: []aistudio.Part{{FunctionResult: &aistudio.FunctionResult{
 				ID: item.CallID, Content: output,
 			}}}})
+		case "tool_search_output":
+			pendingSignature = ""
+			output, err := json.Marshal(map[string]any{"tools": item.Tools})
+			if err != nil {
+				return nil, nil, fmt.Errorf("tool_search_output: %w", err)
+			}
+			contents = append(contents, aistudio.Content{Role: aistudio.RoleTool, Parts: []aistudio.Part{{FunctionResult: &aistudio.FunctionResult{
+				ID: item.CallID, Content: output,
+			}}}})
+		case "additional_tools":
+			pendingSignature = ""
 		case "reasoning":
 			pendingSignature = item.EncryptedContent
 		default:
@@ -368,41 +448,8 @@ func responsesContents(raw json.RawMessage) ([]aistudio.Content, []string, error
 
 func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.Tools, error) {
 	var mapped aistudio.Tools
-	for _, tool := range tools {
-		switch tool.Type {
-		case "function":
-			if tool.Name == "" {
-				return aistudio.Tools{}, fmt.Errorf("function tool name is required")
-			}
-			if tool.Strict != nil && *tool.Strict {
-				return aistudio.Tools{}, fmt.Errorf("function tool strict is not supported by AI Studio Web")
-			}
-			parameters := tool.Parameters
-			if len(parameters) == 0 {
-				parameters = json.RawMessage(`{"type":"object","properties":{}}`)
-			}
-			mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
-				Name: tool.Name, Description: tool.Description, Parameters: parameters,
-			})
-		case "web_search", "web_search_2025_08_26", "web_search_preview", "web_search_preview_2025_03_11":
-			if tool.SearchContextSize != "" || rawJSONConfigured(tool.UserLocation) || rawJSONConfigured(tool.Filters) {
-				return aistudio.Tools{}, fmt.Errorf("AI Studio Web 不支持 web_search 的 search_context_size、user_location 或 filters")
-			}
-			mapped.Google = appendUnique(mapped.Google, "google_search")
-		case "code_interpreter":
-			if err := validateResponsesCodeContainer(tool.Container); err != nil {
-				return aistudio.Tools{}, err
-			}
-			mapped.Google = appendUnique(mapped.Google, "code_execution")
-		case "url_context":
-			mapped.Google = appendUnique(mapped.Google, "url_context")
-		case "google_maps":
-			mapped.Google = appendUnique(mapped.Google, "google_maps")
-		case "image_search":
-			mapped.Google = appendUnique(mapped.Google, "image_search")
-		default:
-			return aistudio.Tools{}, fmt.Errorf("unsupported tool type %q", tool.Type)
-		}
+	if err := appendResponsesTools(&mapped, tools, ""); err != nil {
+		return aistudio.Tools{}, err
 	}
 	config, err := openAIToolChoice(choice)
 	if err != nil {
@@ -413,6 +460,75 @@ func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.
 	}
 	mapped.ToolConfig = config
 	return mapped, nil
+}
+
+func appendResponsesTools(mapped *aistudio.Tools, tools []responsesTool, namespace string) error {
+	for _, tool := range tools {
+		switch tool.Type {
+		case "function":
+			if tool.Name == "" {
+				return fmt.Errorf("function tool name is required")
+			}
+			if tool.Strict != nil && *tool.Strict {
+				return fmt.Errorf("function tool strict is not supported by AI Studio Web")
+			}
+			parameters := tool.Parameters
+			if len(parameters) == 0 {
+				parameters = json.RawMessage(`{"type":"object","properties":{}}`)
+			}
+			mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
+				Name: qualifyResponsesToolName(namespace, tool.Name), Description: tool.Description, Parameters: parameters,
+			})
+		case "custom":
+			if tool.Name == "" {
+				return fmt.Errorf("custom tool name is required")
+			}
+			description := tool.Description
+			if rawJSONConfigured(tool.Format) {
+				description += "\nFreeform input format: " + string(tool.Format)
+			}
+			mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
+				Name:        qualifyResponsesToolName(namespace, tool.Name),
+				Description: strings.TrimSpace(description),
+				Parameters:  json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"}},"required":["input"],"additionalProperties":false}`),
+			})
+		case "namespace":
+			if strings.TrimSpace(tool.Name) == "" {
+				return fmt.Errorf("namespace tool name is required")
+			}
+			childNamespace := qualifyResponsesToolName(namespace, tool.Name)
+			if err := appendResponsesTools(mapped, tool.Tools, childNamespace); err != nil {
+				return fmt.Errorf("namespace %q: %w", tool.Name, err)
+			}
+		case "tool_search":
+			parameters := tool.Parameters
+			if len(parameters) == 0 {
+				parameters = json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"],"additionalProperties":false}`)
+			}
+			mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
+				Name: "tool_search", Description: tool.Description, Parameters: parameters,
+			})
+		case "web_search", "web_search_2025_08_26", "web_search_preview", "web_search_preview_2025_03_11":
+			if tool.SearchContextSize != "" || rawJSONConfigured(tool.UserLocation) || rawJSONConfigured(tool.Filters) {
+				return fmt.Errorf("AI Studio Web 不支持 web_search 的 search_context_size、user_location 或 filters")
+			}
+			mapped.Google = appendUnique(mapped.Google, "google_search")
+		case "code_interpreter":
+			if err := validateResponsesCodeContainer(tool.Container); err != nil {
+				return err
+			}
+			mapped.Google = appendUnique(mapped.Google, "code_execution")
+		case "url_context":
+			mapped.Google = appendUnique(mapped.Google, "url_context")
+		case "google_maps":
+			mapped.Google = appendUnique(mapped.Google, "google_maps")
+		case "image_search":
+			mapped.Google = appendUnique(mapped.Google, "image_search")
+		default:
+			return fmt.Errorf("unsupported tool type %q", tool.Type)
+		}
+	}
+	return nil
 }
 
 func buildResponsesObject(id string, created int64, request responsesRequest, result generationResult) (map[string]any, error) {
@@ -449,7 +565,7 @@ func buildResponsesObject(id string, created int64, request responsesRequest, re
 		if call.ThoughtSignature != "" {
 			output = append(output, responseReasoningSignature(call))
 		}
-		output = append(output, responseFunctionCall(call))
+		output = append(output, responseToolCall(call, request))
 	}
 	for index, media := range result.media {
 		item, err := responseImageGenerationItem(id, index, media)
@@ -552,15 +668,68 @@ func rawJSONConfigured(raw json.RawMessage) bool {
 	return value != "" && value != "null"
 }
 
-func responseFunctionCall(call aistudio.FunctionCall) map[string]any {
-	return map[string]any{
+func responseToolCall(call aistudio.FunctionCall, request responsesRequest) map[string]any {
+	identity := request.toolIdentity(call.Name)
+	if identity.Type == "tool_search" {
+		arguments := map[string]any{}
+		_ = json.Unmarshal(call.Arguments, &arguments)
+		return map[string]any{
+			"id":        "ts_" + call.ID,
+			"type":      "tool_search_call",
+			"status":    "completed",
+			"call_id":   call.ID,
+			"execution": "client",
+			"arguments": arguments,
+		}
+	}
+	if identity.Type == "custom" {
+		item := map[string]any{
+			"id":      "ctc_" + call.ID,
+			"type":    "custom_tool_call",
+			"status":  "completed",
+			"call_id": call.ID,
+			"name":    identity.Name,
+			"input":   responsesCustomToolInput(call.Arguments),
+		}
+		if identity.Namespace != "" {
+			item["namespace"] = identity.Namespace
+		}
+		return item
+	}
+	name := call.Name
+	if identity.Name != "" {
+		name = identity.Name
+	}
+	item := map[string]any{
 		"id":        "fc_" + call.ID,
 		"type":      "function_call",
 		"status":    "completed",
 		"call_id":   call.ID,
-		"name":      call.Name,
+		"name":      name,
 		"arguments": string(call.Arguments),
 	}
+	if identity.Namespace != "" {
+		item["namespace"] = identity.Namespace
+	}
+	return item
+}
+
+func responsesCustomToolInput(arguments json.RawMessage) string {
+	var input struct {
+		Input *string `json:"input"`
+	}
+	if json.Unmarshal(arguments, &input) == nil && input.Input != nil {
+		return *input.Input
+	}
+	return string(arguments)
+}
+
+func cloneResponsesMap(value map[string]any) map[string]any {
+	cloned := make(map[string]any, len(value))
+	for key, item := range value {
+		cloned[key] = item
+	}
+	return cloned
 }
 
 func responseReasoningSignature(call aistudio.FunctionCall) map[string]any {
@@ -847,12 +1016,44 @@ func (writer *responsesStreamWriter) emitToolCall(call aistudio.FunctionCall) er
 			return err
 		}
 	}
-	id := "fc_" + call.ID
+	completed := responseToolCall(call, writer.request)
+	id := completed["id"].(string)
 	index := len(writer.indexes)
 	writer.indexes[id] = index
+	if completed["type"] == "tool_search_call" {
+		item := cloneResponsesMap(completed)
+		item["status"] = "in_progress"
+		if err := writer.emit("response.output_item.added", map[string]any{"output_index": index, "item": item}); err != nil {
+			return err
+		}
+		return writer.emit("response.output_item.done", map[string]any{"output_index": index, "item": completed})
+	}
+	if completed["type"] == "custom_tool_call" {
+		item := cloneResponsesMap(completed)
+		item["status"] = "in_progress"
+		item["input"] = ""
+		if err := writer.emit("response.output_item.added", map[string]any{"output_index": index, "item": item}); err != nil {
+			return err
+		}
+		input := completed["input"].(string)
+		if err := writer.emit("response.custom_tool_call_input.delta", map[string]any{
+			"item_id": id, "output_index": index, "delta": input,
+		}); err != nil {
+			return err
+		}
+		if err := writer.emit("response.custom_tool_call_input.done", map[string]any{
+			"item_id": id, "output_index": index, "input": input,
+		}); err != nil {
+			return err
+		}
+		return writer.emit("response.output_item.done", map[string]any{"output_index": index, "item": completed})
+	}
 	item := map[string]any{
 		"id": id, "type": "function_call", "status": "in_progress",
-		"call_id": call.ID, "name": call.Name, "arguments": "",
+		"call_id": call.ID, "name": completed["name"], "arguments": "",
+	}
+	if namespace, ok := completed["namespace"]; ok {
+		item["namespace"] = namespace
 	}
 	if err := writer.emit("response.output_item.added", map[string]any{"output_index": index, "item": item}); err != nil {
 		return err
@@ -864,11 +1065,11 @@ func (writer *responsesStreamWriter) emitToolCall(call aistudio.FunctionCall) er
 		return err
 	}
 	if err := writer.emit("response.function_call_arguments.done", map[string]any{
-		"item_id": id, "output_index": index, "arguments": arguments, "name": call.Name,
+		"item_id": id, "output_index": index, "arguments": arguments, "name": completed["name"],
 	}); err != nil {
 		return err
 	}
-	return writer.emit("response.output_item.done", map[string]any{"output_index": index, "item": responseFunctionCall(call)})
+	return writer.emit("response.output_item.done", map[string]any{"output_index": index, "item": completed})
 }
 
 func (writer *responsesStreamWriter) emitMedia(media aistudio.Media) error {
