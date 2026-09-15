@@ -25,10 +25,12 @@ func TestEncodeGenerateContentRequest_ToolConfig(t *testing.T) {
 	}
 
 	tests := []struct {
-		name      string
-		model     string
-		tools     Tools
-		wantWire7 any
+		name       string
+		model      string
+		tools      Tools
+		runtime    RequestContext
+		wantLength int
+		wantWire13 any
 	}{
 		{
 			name:  "functions+Google",
@@ -37,7 +39,8 @@ func TestEncodeGenerateContentRequest_ToolConfig(t *testing.T) {
 				Functions: []FunctionDeclaration{sampleFunc},
 				Google:    []string{"google_search"},
 			},
-			wantWire7: []any{nil, nil, nil, true},
+			wantLength: 14,
+			wantWire13: []any{nil, nil, true},
 		},
 		{
 			name:  "functions+GoogleSearch",
@@ -46,7 +49,8 @@ func TestEncodeGenerateContentRequest_ToolConfig(t *testing.T) {
 				Functions:    []FunctionDeclaration{sampleFunc},
 				GoogleSearch: &GoogleSearchOptions{WebSearch: true},
 			},
-			wantWire7: []any{nil, nil, nil, true},
+			wantLength: 14,
+			wantWire13: []any{nil, nil, true},
 		},
 		{
 			name:  "only-functions",
@@ -54,7 +58,7 @@ func TestEncodeGenerateContentRequest_ToolConfig(t *testing.T) {
 			tools: Tools{
 				Functions: []FunctionDeclaration{sampleFunc},
 			},
-			wantWire7: nil,
+			wantLength: 11,
 		},
 		{
 			name:  "only-builtins",
@@ -62,7 +66,7 @@ func TestEncodeGenerateContentRequest_ToolConfig(t *testing.T) {
 			tools: Tools{
 				Google: []string{"google_search"},
 			},
-			wantWire7: nil,
+			wantLength: 11,
 		},
 		{
 			name:  "mixed gemini-2.5-flash",
@@ -71,7 +75,7 @@ func TestEncodeGenerateContentRequest_ToolConfig(t *testing.T) {
 				Functions: []FunctionDeclaration{sampleFunc},
 				Google:    []string{"google_search"},
 			},
-			wantWire7: nil,
+			wantLength: 11,
 		},
 		{
 			name:  "mixed tools disabled",
@@ -81,7 +85,28 @@ func TestEncodeGenerateContentRequest_ToolConfig(t *testing.T) {
 				Google:     []string{"google_search"},
 				ToolConfig: ToolConfig{Mode: "none"},
 			},
-			wantWire7: nil,
+			wantLength: 11,
+		},
+		{
+			name:  "mixed tools with timezone",
+			model: "gemini-3.8-flash",
+			tools: Tools{
+				Functions: []FunctionDeclaration{sampleFunc},
+				Google:    []string{"google_search"},
+			},
+			runtime:    RequestContext{Timezone: "Asia/Shanghai"},
+			wantLength: 14,
+			wantWire13: []any{[]any{nil, nil, "Asia/Shanghai"}, nil, true},
+		},
+		{
+			name:  "timezone without mixed tools",
+			model: "gemini-3.8-flash",
+			tools: Tools{
+				Functions: []FunctionDeclaration{sampleFunc},
+			},
+			runtime:    RequestContext{Timezone: "Asia/Shanghai"},
+			wantLength: 14,
+			wantWire13: []any{[]any{nil, nil, "Asia/Shanghai"}},
 		},
 	}
 
@@ -92,7 +117,7 @@ func TestEncodeGenerateContentRequest_ToolConfig(t *testing.T) {
 				Contents: baseContents,
 				Tools:    tc.tools,
 			}
-			encoded, err := EncodeGenerateContentRequest(req, defaults, RequestContext{})
+			encoded, err := EncodeGenerateContentRequest(req, defaults, tc.runtime)
 			if err != nil {
 				t.Fatalf("EncodeGenerateContentRequest failed: %v", err)
 			}
@@ -102,13 +127,19 @@ func TestEncodeGenerateContentRequest_ToolConfig(t *testing.T) {
 				t.Fatalf("json.Unmarshal failed: %v", err)
 			}
 
-			if len(wire) < 11 {
-				t.Fatalf("wire length = %d, want at least 11", len(wire))
+			if len(wire) != tc.wantLength {
+				t.Fatalf("wire length = %d, want %d", len(wire), tc.wantLength)
 			}
 
-			gotWire7 := wire[7]
-			if !reflect.DeepEqual(gotWire7, tc.wantWire7) {
-				t.Errorf("wire[7] mismatch: got %#v, want %#v", gotWire7, tc.wantWire7)
+			if wire[7] != nil {
+				t.Errorf("wire[7] = %#v, want nil", wire[7])
+			}
+			var gotWire13 any
+			if len(wire) > 13 {
+				gotWire13 = wire[13]
+			}
+			if !reflect.DeepEqual(gotWire13, tc.wantWire13) {
+				t.Errorf("wire[13] mismatch: got %#v, want %#v", gotWire13, tc.wantWire13)
 			}
 		})
 	}

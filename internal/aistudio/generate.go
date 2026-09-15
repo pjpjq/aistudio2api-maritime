@@ -35,8 +35,10 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 	if err != nil {
 		return nil, err
 	}
+	modelName := strings.TrimPrefix(request.Model, "models/")
+	includeServerSideToolInvocations := request.Tools.ToolConfig.Mode != "none" && strings.HasPrefix(modelName, "gemini-3") && len(request.Tools.Functions) > 0 && (len(request.Tools.Google) > 0 || request.Tools.GoogleSearch != nil)
 	length := 11
-	if runtime.Timezone != "" {
+	if runtime.Timezone != "" || includeServerSideToolInvocations {
 		length = 14
 	}
 	wire := make([]any, length)
@@ -50,13 +52,20 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 	if explicitTools {
 		wire[6] = tools
 	}
-	modelName := strings.TrimPrefix(request.Model, "models/")
-	if request.Tools.ToolConfig.Mode != "none" && strings.HasPrefix(modelName, "gemini-3") && len(request.Tools.Functions) > 0 && (len(request.Tools.Google) > 0 || request.Tools.GoogleSearch != nil) {
-		wire[7] = []any{nil, nil, nil, true}
-	}
 	wire[10] = int64(1)
-	if runtime.Timezone != "" {
-		wire[13] = []any{[]any{nil, nil, runtime.Timezone}}
+	if runtime.Timezone != "" || includeServerSideToolInvocations {
+		toolConfigLength := 1
+		if includeServerSideToolInvocations {
+			toolConfigLength = 3
+		}
+		toolConfig := make([]any, toolConfigLength)
+		if runtime.Timezone != "" {
+			toolConfig[0] = []any{nil, nil, runtime.Timezone}
+		}
+		if includeServerSideToolInvocations {
+			toolConfig[2] = true
+		}
+		wire[13] = toolConfig
 	}
 	return json.Marshal(wire)
 }
