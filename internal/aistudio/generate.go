@@ -50,6 +50,10 @@ func EncodeGenerateContentRequest(request GenerateRequest, defaults GenerationDe
 	if explicitTools {
 		wire[6] = tools
 	}
+	modelName := strings.TrimPrefix(request.Model, "models/")
+	if request.Tools.ToolConfig.Mode != "none" && strings.HasPrefix(modelName, "gemini-3") && len(request.Tools.Functions) > 0 && (len(request.Tools.Google) > 0 || request.Tools.GoogleSearch != nil) {
+		wire[7] = []any{nil, nil, nil, true}
+	}
 	wire[10] = int64(1)
 	if runtime.Timezone != "" {
 		wire[13] = []any{[]any{nil, nil, runtime.Timezone}}
