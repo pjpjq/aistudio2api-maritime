@@ -467,7 +467,8 @@ func responsesContents(raw json.RawMessage) ([]aistudio.Content, []string, error
 
 func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.Tools, error) {
 	var mapped aistudio.Tools
-	if err := appendResponsesTools(&mapped, tools, ""); err != nil {
+	seen := make(map[string]struct{})
+	if err := appendResponsesTools(&mapped, tools, "", seen); err != nil {
 		return aistudio.Tools{}, err
 	}
 	config, err := openAIToolChoice(choice)
@@ -481,7 +482,7 @@ func mapResponsesTools(tools []responsesTool, choice json.RawMessage) (aistudio.
 	return mapped, nil
 }
 
-func appendResponsesTools(mapped *aistudio.Tools, tools []responsesTool, namespace string) error {
+func appendResponsesTools(mapped *aistudio.Tools, tools []responsesTool, namespace string, seen map[string]struct{}) error {
 	for _, tool := range tools {
 		switch tool.Type {
 		case "function":
@@ -493,9 +494,13 @@ func appendResponsesTools(mapped *aistudio.Tools, tools []responsesTool, namespa
 			if len(parameters) == 0 {
 				parameters = json.RawMessage(`{"type":"object","properties":{}}`)
 			}
-			mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
-				Name: qualifyResponsesToolName(namespace, tool.Name), Description: tool.Description, Parameters: parameters,
-			})
+			fnName := qualifyResponsesToolName(namespace, tool.Name)
+			if _, exists := seen[fnName]; !exists {
+				seen[fnName] = struct{}{}
+				mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
+					Name: fnName, Description: tool.Description, Parameters: parameters,
+				})
+			}
 		case "custom":
 			if tool.Name == "" {
 				return fmt.Errorf("custom tool name is required")
@@ -504,27 +509,35 @@ func appendResponsesTools(mapped *aistudio.Tools, tools []responsesTool, namespa
 			if rawJSONConfigured(tool.Format) {
 				description += "\nFreeform input format: " + string(tool.Format)
 			}
-			mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
-				Name:        qualifyResponsesToolName(namespace, tool.Name),
-				Description: strings.TrimSpace(description),
-				Parameters:  json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"}},"required":["input"],"additionalProperties":false}`),
-			})
+			fnName := qualifyResponsesToolName(namespace, tool.Name)
+			if _, exists := seen[fnName]; !exists {
+				seen[fnName] = struct{}{}
+				mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
+					Name:        fnName,
+					Description: strings.TrimSpace(description),
+					Parameters:  json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"}},"required":["input"],"additionalProperties":false}`),
+				})
+			}
 		case "namespace":
 			if strings.TrimSpace(tool.Name) == "" {
 				return fmt.Errorf("namespace tool name is required")
 			}
 			childNamespace := qualifyResponsesToolName(namespace, tool.Name)
-			if err := appendResponsesTools(mapped, tool.Tools, childNamespace); err != nil {
+			if err := appendResponsesTools(mapped, tool.Tools, childNamespace, seen); err != nil {
 				return fmt.Errorf("namespace %q: %w", tool.Name, err)
 			}
 		case "tool_search":
-			parameters := tool.Parameters
-			if len(parameters) == 0 {
-				parameters = json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"],"additionalProperties":false}`)
+			fnName := "tool_search"
+			if _, exists := seen[fnName]; !exists {
+				seen[fnName] = struct{}{}
+				parameters := tool.Parameters
+				if len(parameters) == 0 {
+					parameters = json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"],"additionalProperties":false}`)
+				}
+				mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
+					Name: fnName, Description: tool.Description, Parameters: parameters,
+				})
 			}
-			mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
-				Name: "tool_search", Description: tool.Description, Parameters: parameters,
-			})
 		case "web_search", "web_search_2025_08_26", "web_search_preview", "web_search_preview_2025_03_11":
 			if tool.SearchContextSize != "" || rawJSONConfigured(tool.UserLocation) || rawJSONConfigured(tool.Filters) {
 				return fmt.Errorf("AI Studio Web 不支持 web_search 的 search_context_size、user_location 或 filters")

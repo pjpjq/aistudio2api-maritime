@@ -158,3 +158,26 @@ func TestSanitizeAndRestoreSpecialCharacterToolNames(t *testing.T) {
 		t.Fatalf("expected restored name custom:action-name, got %#v", item1)
 	}
 }
+
+func TestMapResponsesToolsDeduplicatesFunctions(t *testing.T) {
+	request := responsesRequest{Tools: []responsesTool{
+		{
+			Type: "namespace", Name: "sites", Tools: []responsesTool{
+				{Type: "function", Name: "create_site"},
+			},
+		},
+		{
+			Type: "namespace", Name: "sites", Tools: []responsesTool{
+				{Type: "function", Name: "create_site"},
+			},
+		},
+	}}
+
+	mapped, err := mapResponsesTools(request.Tools, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mapped.Functions) != 1 {
+		t.Fatalf("expected 1 function after deduplication, got %d", len(mapped.Functions))
+	}
+}

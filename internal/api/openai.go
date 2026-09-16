@@ -429,7 +429,8 @@ func audioMIME(format string) string {
 
 func mapOpenAITools(tools []openAITool, choice json.RawMessage) (aistudio.Tools, error) {
 	var mapped aistudio.Tools
-	if err := appendOpenAITools(&mapped, tools, ""); err != nil {
+	seen := make(map[string]struct{})
+	if err := appendOpenAITools(&mapped, tools, "", seen); err != nil {
 		return aistudio.Tools{}, err
 	}
 	config, err := openAIToolChoice(choice)
@@ -443,7 +444,7 @@ func mapOpenAITools(tools []openAITool, choice json.RawMessage) (aistudio.Tools,
 	return mapped, nil
 }
 
-func appendOpenAITools(mapped *aistudio.Tools, tools []openAITool, namespace string) error {
+func appendOpenAITools(mapped *aistudio.Tools, tools []openAITool, namespace string, seen map[string]struct{}) error {
 	for _, tool := range tools {
 		switch tool.Type {
 		case "function":
@@ -465,11 +466,15 @@ func appendOpenAITools(mapped *aistudio.Tools, tools []openAITool, namespace str
 			if len(parameters) == 0 {
 				parameters = json.RawMessage(`{"type":"object","properties":{}}`)
 			}
-			mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
-				Name:        qualifyResponsesToolName(namespace, name),
-				Description: description,
-				Parameters:  parameters,
-			})
+			fnName := qualifyResponsesToolName(namespace, name)
+			if _, exists := seen[fnName]; !exists {
+				seen[fnName] = struct{}{}
+				mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
+					Name:        fnName,
+					Description: description,
+					Parameters:  parameters,
+				})
+			}
 		case "custom":
 			name := tool.Name
 			if name == "" {
@@ -482,11 +487,15 @@ func appendOpenAITools(mapped *aistudio.Tools, tools []openAITool, namespace str
 			if description == "" {
 				description = tool.Function.Description
 			}
-			mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
-				Name:        qualifyResponsesToolName(namespace, name),
-				Description: strings.TrimSpace(description),
-				Parameters:  json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"}},"required":["input"],"additionalProperties":false}`),
-			})
+			fnName := qualifyResponsesToolName(namespace, name)
+			if _, exists := seen[fnName]; !exists {
+				seen[fnName] = struct{}{}
+				mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
+					Name:        fnName,
+					Description: strings.TrimSpace(description),
+					Parameters:  json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"}},"required":["input"],"additionalProperties":false}`),
+				})
+			}
 		case "namespace":
 			name := strings.TrimSpace(tool.Name)
 			if name == "" {
@@ -496,20 +505,24 @@ func appendOpenAITools(mapped *aistudio.Tools, tools []openAITool, namespace str
 				return fmt.Errorf("namespace tool name is required")
 			}
 			childNamespace := qualifyResponsesToolName(namespace, name)
-			if err := appendOpenAITools(mapped, tool.Tools, childNamespace); err != nil {
+			if err := appendOpenAITools(mapped, tool.Tools, childNamespace, seen); err != nil {
 				return fmt.Errorf("namespace %q: %w", name, err)
 			}
 		case "tool_search":
-			parameters := tool.Parameters
-			if len(parameters) == 0 {
-				parameters = tool.Function.Parameters
+			fnName := "tool_search"
+			if _, exists := seen[fnName]; !exists {
+				seen[fnName] = struct{}{}
+				parameters := tool.Parameters
+				if len(parameters) == 0 {
+					parameters = tool.Function.Parameters
+				}
+				if len(parameters) == 0 {
+					parameters = json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"],"additionalProperties":false}`)
+				}
+				mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
+					Name: fnName, Description: tool.Description, Parameters: parameters,
+				})
 			}
-			if len(parameters) == 0 {
-				parameters = json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"],"additionalProperties":false}`)
-			}
-			mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
-				Name: "tool_search", Description: tool.Description, Parameters: parameters,
-			})
 		case "web_search", "web_search_preview":
 			mapped.Google = appendUnique(mapped.Google, "google_search")
 		case "code_interpreter":

@@ -383,7 +383,8 @@ func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 
 func mapAnthropicTools(tools []anthropicTool, choice json.RawMessage) (aistudio.Tools, error) {
 	var mapped aistudio.Tools
-	if err := appendAnthropicTools(&mapped, tools, ""); err != nil {
+	seen := make(map[string]struct{})
+	if err := appendAnthropicTools(&mapped, tools, "", seen); err != nil {
 		return aistudio.Tools{}, err
 	}
 	config, err := anthropicToolChoice(choice)
@@ -397,7 +398,7 @@ func mapAnthropicTools(tools []anthropicTool, choice json.RawMessage) (aistudio.
 	return mapped, nil
 }
 
-func appendAnthropicTools(mapped *aistudio.Tools, tools []anthropicTool, namespace string) error {
+func appendAnthropicTools(mapped *aistudio.Tools, tools []anthropicTool, namespace string, seen map[string]struct{}) error {
 	for _, tool := range tools {
 		typeName := strings.ToLower(tool.Type)
 		switch {
@@ -407,7 +408,7 @@ func appendAnthropicTools(mapped *aistudio.Tools, tools []anthropicTool, namespa
 				return fmt.Errorf("namespace tool name is required")
 			}
 			childNamespace := qualifyResponsesToolName(namespace, name)
-			if err := appendAnthropicTools(mapped, tool.Tools, childNamespace); err != nil {
+			if err := appendAnthropicTools(mapped, tool.Tools, childNamespace, seen); err != nil {
 				return fmt.Errorf("namespace %q: %w", name, err)
 			}
 		case typeName == "web_search_20250305":
@@ -456,9 +457,13 @@ func appendAnthropicTools(mapped *aistudio.Tools, tools []anthropicTool, namespa
 			if len(parameters) == 0 {
 				parameters = json.RawMessage(`{"type":"object","properties":{}}`)
 			}
-			mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
-				Name: qualifyResponsesToolName(namespace, tool.Name), Description: tool.Description, Parameters: parameters,
-			})
+			fnName := qualifyResponsesToolName(namespace, tool.Name)
+			if _, exists := seen[fnName]; !exists {
+				seen[fnName] = struct{}{}
+				mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
+					Name: fnName, Description: tool.Description, Parameters: parameters,
+				})
+			}
 		default:
 			return fmt.Errorf("unsupported tool type %q", tool.Type)
 		}
