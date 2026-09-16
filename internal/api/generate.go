@@ -54,6 +54,9 @@ func (result *generationResult) apply(event aistudio.Event) error {
 	case aistudio.EventToolCall:
 		if event.ToolCall != nil {
 			call := *event.ToolCall
+			if call.ID == "" {
+				call.ID = newID("call")
+			}
 			if len(call.Arguments) == 0 {
 				call.Arguments = json.RawMessage(`{}`)
 			}

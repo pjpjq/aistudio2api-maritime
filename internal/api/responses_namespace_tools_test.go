@@ -105,3 +105,18 @@ func TestResponsesAdditionalToolsJoinRequestWithoutContentError(t *testing.T) {
 		t.Fatalf("additional_tools produced conversation content: %#v", contents)
 	}
 }
+
+func TestResponseToolCallGeneratesCallIDWhenEmpty(t *testing.T) {
+	request := responsesRequest{Tools: []responsesTool{{
+		Type: "namespace", Name: "functions", Tools: []responsesTool{{Type: "function", Name: "echo"}},
+	}}}
+	item := responseToolCall(aistudio.FunctionCall{Name: "functions__echo"}, request)
+	callID, _ := item["call_id"].(string)
+	if callID == "" {
+		t.Fatal("expected generated call_id, got empty")
+	}
+	id, _ := item["id"].(string)
+	if !strings.HasPrefix(id, "fc_") {
+		t.Fatalf("expected fc_ prefix for item id, got %q", id)
+	}
+}

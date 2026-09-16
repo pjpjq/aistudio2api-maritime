@@ -125,12 +125,19 @@ func encodeContent(content Content, functionNames map[string]string) ([]any, err
 	}
 	parts := make([]any, 0, len(content.Parts))
 	for index, part := range content.Parts {
-		if part.FunctionCall != nil && part.FunctionCall.ID != "" {
-			functionNames[part.FunctionCall.ID] = part.FunctionCall.Name
+		if part.FunctionCall != nil {
+			if part.FunctionCall.ID != "" {
+				functionNames[part.FunctionCall.ID] = part.FunctionCall.Name
+			}
+			functionNames[""] = part.FunctionCall.Name
 		}
 		if part.FunctionResult != nil && part.FunctionResult.Name == "" {
 			part.FunctionResult = cloneFunctionResult(part.FunctionResult)
-			part.FunctionResult.Name = functionNames[part.FunctionResult.ID]
+			if name, ok := functionNames[part.FunctionResult.ID]; ok && name != "" {
+				part.FunctionResult.Name = name
+			} else if fallback, ok := functionNames[""]; ok {
+				part.FunctionResult.Name = fallback
+			}
 		}
 		encoded, err := encodePart(part)
 		if err != nil {

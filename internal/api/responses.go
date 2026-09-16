@@ -669,6 +669,9 @@ func rawJSONConfigured(raw json.RawMessage) bool {
 }
 
 func responseToolCall(call aistudio.FunctionCall, request responsesRequest) map[string]any {
+	if call.ID == "" {
+		call.ID = newID("call")
+	}
 	identity := request.toolIdentity(call.Name)
 	if identity.Type == "tool_search" {
 		arguments := map[string]any{}
@@ -1050,7 +1053,7 @@ func (writer *responsesStreamWriter) emitToolCall(call aistudio.FunctionCall) er
 	}
 	item := map[string]any{
 		"id": id, "type": "function_call", "status": "in_progress",
-		"call_id": call.ID, "name": completed["name"], "arguments": "",
+		"call_id": completed["call_id"], "name": completed["name"], "arguments": "",
 	}
 	if namespace, ok := completed["namespace"]; ok {
 		item["namespace"] = namespace
