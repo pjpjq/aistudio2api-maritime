@@ -30,8 +30,9 @@ type runtimeAdmin struct {
 	login      aistudio.IsolatedLoginDriver
 	workers    *accountWorkerManager
 	headers    *accountHeaderProvider
-	configPath string
-	config     config.Config
+	configPath     string
+	config         config.Config
+	recoverTrigger chan struct{}
 }
 
 // requestRegistry 保存活动请求与事件订阅
@@ -96,11 +97,19 @@ func newRuntimeAdmin(
 	headers *accountHeaderProvider,
 	cfg config.Config,
 ) *runtimeAdmin {
-	return &runtimeAdmin{
+	admin := &runtimeAdmin{
 		lifecycle: lifecycle, pool: pool, store: store, service: service, requests: registry, login: login,
 		workers: workers, headers: headers,
 		configPath: ".env", config: cfg,
+		recoverTrigger: make(chan struct{}, 1),
 	}
+	if service != nil {
+		service.onNoEligible = func() {
+			admin.triggerRecovery()
+		}
+	}
+	go admin.autoRecoverAuthRequired(lifecycle)
+	return admin
 }
 
 // newRequestRegistry 创建活动请求注册表
@@ -500,6 +509,59 @@ func (admin *runtimeAdmin) VerifyAccount(ctx context.Context, accountID string) 
 		verification.Authenticated, time.Since(startedAt).Round(time.Millisecond),
 	))
 	return admin.account(account.ID)
+}
+
+func (admin *runtimeAdmin) triggerRecovery() {
+	if admin == nil || admin.recoverTrigger == nil {
+		return
+	}
+	select {
+	case admin.recoverTrigger <- struct{}{}:
+	default:
+	}
+}
+
+func (admin *runtimeAdmin) autoRecoverAuthRequired(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	var lastRecoverAt time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		case <-admin.recoverTrigger:
+		}
+		if time.Since(lastRecoverAt) < 10*time.Second {
+			continue
+		}
+		statuses := admin.pool.Status()
+		hasUsable := false
+		var authRequiredIDs []string
+		for _, st := range statuses {
+			if !st.Enabled {
+				continue
+			}
+			if st.State == aistudio.AccountReady || st.State == aistudio.AccountBusy {
+				hasUsable = true
+			} else if st.State == aistudio.AccountAuthRequired {
+				authRequiredIDs = append(authRequiredIDs, st.ID)
+			}
+		}
+		if !hasUsable && len(authRequiredIDs) > 0 {
+			lastRecoverAt = time.Now()
+			admin.requests.log("service", "INFO", fmt.Sprintf(
+				"自动热恢复 | 检测到 %d 个掉线账号且无可调度账号，开始验证重连", len(authRequiredIDs),
+			))
+			for _, id := range authRequiredIDs {
+				if _, err := admin.VerifyAccount(ctx, id); err != nil {
+					admin.requests.log("service", "WARNING", fmt.Sprintf("自动热恢复账号 %s 失败: %v", id, err))
+				} else {
+					admin.requests.log("service", "INFO", fmt.Sprintf("自动热恢复账号 %s 成功", id))
+				}
+			}
+		}
+	}
 }
 
 // StartService 使用管理器提供的启动生命周期启动生成服务

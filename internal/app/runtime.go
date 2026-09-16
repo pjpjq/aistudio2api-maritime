@@ -1532,6 +1532,7 @@ type trackedService struct {
 	modelApplied       uint64
 	performanceMu      sync.RWMutex
 	performance        map[string]map[string]generationPerformance
+	onNoEligible       func()
 }
 
 type modelCatalogService interface {
@@ -2484,6 +2485,9 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 		active := service.workers.WarmAccountIDs()
 		groups, err := service.pool.ClassifyCandidates(ctx, selection, warm)
 		if err != nil {
+			if errors.Is(err, aistudio.ErrNoEligibleAccount) && service.onNoEligible != nil {
+				service.onNoEligible()
+			}
 			return nil, err
 		}
 		groups.WarmReady = excludeAccountIDs(groups.WarmReady, failedWorkers)
