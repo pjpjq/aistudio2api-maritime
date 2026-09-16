@@ -63,8 +63,12 @@ type openAIToolCall struct {
 }
 
 type openAITool struct {
-	Type     string `json:"type"`
-	Function struct {
+	Type        string          `json:"type"`
+	Name        string          `json:"name,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Tools       []openAITool    `json:"tools,omitempty"`
+	Function    struct {
 		Name        string          `json:"name"`
 		Description string          `json:"description"`
 		Parameters  json.RawMessage `json:"parameters"`
@@ -425,23 +429,86 @@ func audioMIME(format string) string {
 
 func mapOpenAITools(tools []openAITool, choice json.RawMessage) (aistudio.Tools, error) {
 	var mapped aistudio.Tools
+	if err := appendOpenAITools(&mapped, tools, ""); err != nil {
+		return aistudio.Tools{}, err
+	}
+	config, err := openAIToolChoice(choice)
+	if err != nil {
+		return aistudio.Tools{}, err
+	}
+	if len(mapped.Functions) == 0 && len(mapped.Google) == 0 {
+		return mapped, nil
+	}
+	mapped.ToolConfig = config
+	return mapped, nil
+}
+
+func appendOpenAITools(mapped *aistudio.Tools, tools []openAITool, namespace string) error {
 	for _, tool := range tools {
 		switch tool.Type {
 		case "function":
-			if tool.Function.Name == "" {
-				return aistudio.Tools{}, fmt.Errorf("function tool name is required")
+			name := tool.Function.Name
+			if name == "" {
+				name = tool.Name
 			}
-			if tool.Function.Strict != nil && *tool.Function.Strict {
-				return aistudio.Tools{}, fmt.Errorf("function tool strict is not supported by AI Studio Web")
+			if name == "" {
+				return fmt.Errorf("function tool name is required")
+			}
+			description := tool.Function.Description
+			if description == "" {
+				description = tool.Description
 			}
 			parameters := tool.Function.Parameters
+			if len(parameters) == 0 {
+				parameters = tool.Parameters
+			}
 			if len(parameters) == 0 {
 				parameters = json.RawMessage(`{"type":"object","properties":{}}`)
 			}
 			mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
-				Name:        tool.Function.Name,
-				Description: tool.Function.Description,
+				Name:        qualifyResponsesToolName(namespace, name),
+				Description: description,
 				Parameters:  parameters,
+			})
+		case "custom":
+			name := tool.Name
+			if name == "" {
+				name = tool.Function.Name
+			}
+			if name == "" {
+				return fmt.Errorf("custom tool name is required")
+			}
+			description := tool.Description
+			if description == "" {
+				description = tool.Function.Description
+			}
+			mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
+				Name:        qualifyResponsesToolName(namespace, name),
+				Description: strings.TrimSpace(description),
+				Parameters:  json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"}},"required":["input"],"additionalProperties":false}`),
+			})
+		case "namespace":
+			name := strings.TrimSpace(tool.Name)
+			if name == "" {
+				name = strings.TrimSpace(tool.Function.Name)
+			}
+			if name == "" {
+				return fmt.Errorf("namespace tool name is required")
+			}
+			childNamespace := qualifyResponsesToolName(namespace, name)
+			if err := appendOpenAITools(mapped, tool.Tools, childNamespace); err != nil {
+				return fmt.Errorf("namespace %q: %w", name, err)
+			}
+		case "tool_search":
+			parameters := tool.Parameters
+			if len(parameters) == 0 {
+				parameters = tool.Function.Parameters
+			}
+			if len(parameters) == 0 {
+				parameters = json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"],"additionalProperties":false}`)
+			}
+			mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
+				Name: "tool_search", Description: tool.Description, Parameters: parameters,
 			})
 		case "web_search", "web_search_preview":
 			mapped.Google = appendUnique(mapped.Google, "google_search")
@@ -454,18 +521,10 @@ func mapOpenAITools(tools []openAITool, choice json.RawMessage) (aistudio.Tools,
 		case "image_search":
 			mapped.Google = appendUnique(mapped.Google, "image_search")
 		default:
-			return aistudio.Tools{}, fmt.Errorf("unsupported tool type %q", tool.Type)
+			return fmt.Errorf("unsupported tool type %q", tool.Type)
 		}
 	}
-	config, err := openAIToolChoice(choice)
-	if err != nil {
-		return aistudio.Tools{}, err
-	}
-	if len(mapped.Functions) == 0 && len(mapped.Google) == 0 {
-		return mapped, nil
-	}
-	mapped.ToolConfig = config
-	return mapped, nil
+	return nil
 }
 
 func openAIToolChoice(raw json.RawMessage) (aistudio.ToolConfig, error) {

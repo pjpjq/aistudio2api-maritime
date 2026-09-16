@@ -534,9 +534,7 @@ func (admin *runtimeAdmin) recoverNow(ctx context.Context) bool {
 		if !st.Enabled {
 			continue
 		}
-		if st.State == aistudio.AccountReady || st.State == aistudio.AccountBusy {
-			return true
-		} else if st.State == aistudio.AccountAuthRequired {
+		if st.State == aistudio.AccountAuthRequired {
 			authRequiredIDs = append(authRequiredIDs, st.ID)
 		}
 	}

@@ -42,6 +42,7 @@ type anthropicTool struct {
 	Name        string                     `json:"name"`
 	Description string                     `json:"description"`
 	InputSchema json.RawMessage            `json:"input_schema"`
+	Tools       []anthropicTool            `json:"tools,omitempty"`
 	Options     map[string]json.RawMessage `json:"-"`
 }
 
@@ -59,6 +60,7 @@ func (tool *anthropicTool) UnmarshalJSON(data []byte) error {
 	delete(fields, "name")
 	delete(fields, "description")
 	delete(fields, "input_schema")
+	delete(fields, "tools")
 	*tool = anthropicTool(known)
 	tool.Options = fields
 	return nil
@@ -381,61 +383,8 @@ func anthropicParts(raw json.RawMessage) ([]aistudio.Part, error) {
 
 func mapAnthropicTools(tools []anthropicTool, choice json.RawMessage) (aistudio.Tools, error) {
 	var mapped aistudio.Tools
-	for _, tool := range tools {
-		typeName := strings.ToLower(tool.Type)
-		switch {
-		case typeName == "web_search_20250305":
-			if err := validateAnthropicServerTool(tool, "web_search"); err != nil {
-				return aistudio.Tools{}, err
-			}
-			mapped.Google = appendUnique(mapped.Google, "google_search")
-		case typeName == "image_search":
-			if err := validateAnthropicServerTool(tool, "image_search"); err != nil {
-				return aistudio.Tools{}, err
-			}
-			mapped.Google = appendUnique(mapped.Google, "image_search")
-		case typeName == "web_fetch_20250910":
-			if err := validateAnthropicServerTool(tool, "web_fetch"); err != nil {
-				return aistudio.Tools{}, err
-			}
-			mapped.Google = appendUnique(mapped.Google, "url_context")
-		case typeName == "code_execution_20250522", typeName == "code_execution_20250825":
-			if err := validateAnthropicServerTool(tool, "code_execution"); err != nil {
-				return aistudio.Tools{}, err
-			}
-			mapped.Google = appendUnique(mapped.Google, "code_execution")
-		case typeName == "url_context":
-			if err := validateAnthropicServerTool(tool, "url_context"); err != nil {
-				return aistudio.Tools{}, err
-			}
-			mapped.Google = appendUnique(mapped.Google, "url_context")
-		case typeName == "google_maps":
-			if err := validateAnthropicServerTool(tool, "google_maps"); err != nil {
-				return aistudio.Tools{}, err
-			}
-			mapped.Google = appendUnique(mapped.Google, "google_maps")
-		case typeName == "", typeName == "custom":
-			if tool.Name == "" {
-				return aistudio.Tools{}, fmt.Errorf("tool name is required")
-			}
-			if len(tool.Options) > 0 {
-				fields := make([]string, 0, len(tool.Options))
-				for field := range tool.Options {
-					fields = append(fields, field)
-				}
-				sort.Strings(fields)
-				return aistudio.Tools{}, fmt.Errorf("custom tool %q has unsupported option %q", tool.Name, fields[0])
-			}
-			parameters := tool.InputSchema
-			if len(parameters) == 0 {
-				parameters = json.RawMessage(`{"type":"object","properties":{}}`)
-			}
-			mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
-				Name: tool.Name, Description: tool.Description, Parameters: parameters,
-			})
-		default:
-			return aistudio.Tools{}, fmt.Errorf("unsupported tool type %q", tool.Type)
-		}
+	if err := appendAnthropicTools(&mapped, tools, ""); err != nil {
+		return aistudio.Tools{}, err
 	}
 	config, err := anthropicToolChoice(choice)
 	if err != nil {
@@ -446,6 +395,75 @@ func mapAnthropicTools(tools []anthropicTool, choice json.RawMessage) (aistudio.
 	}
 	mapped.ToolConfig = config
 	return mapped, nil
+}
+
+func appendAnthropicTools(mapped *aistudio.Tools, tools []anthropicTool, namespace string) error {
+	for _, tool := range tools {
+		typeName := strings.ToLower(tool.Type)
+		switch {
+		case typeName == "namespace":
+			name := strings.TrimSpace(tool.Name)
+			if name == "" {
+				return fmt.Errorf("namespace tool name is required")
+			}
+			childNamespace := qualifyResponsesToolName(namespace, name)
+			if err := appendAnthropicTools(mapped, tool.Tools, childNamespace); err != nil {
+				return fmt.Errorf("namespace %q: %w", name, err)
+			}
+		case typeName == "web_search_20250305":
+			if err := validateAnthropicServerTool(tool, "web_search"); err != nil {
+				return err
+			}
+			mapped.Google = appendUnique(mapped.Google, "google_search")
+		case typeName == "image_search":
+			if err := validateAnthropicServerTool(tool, "image_search"); err != nil {
+				return err
+			}
+			mapped.Google = appendUnique(mapped.Google, "image_search")
+		case typeName == "web_fetch_20250910":
+			if err := validateAnthropicServerTool(tool, "web_fetch"); err != nil {
+				return err
+			}
+			mapped.Google = appendUnique(mapped.Google, "url_context")
+		case typeName == "code_execution_20250522", typeName == "code_execution_20250825":
+			if err := validateAnthropicServerTool(tool, "code_execution"); err != nil {
+				return err
+			}
+			mapped.Google = appendUnique(mapped.Google, "code_execution")
+		case typeName == "url_context":
+			if err := validateAnthropicServerTool(tool, "url_context"); err != nil {
+				return err
+			}
+			mapped.Google = appendUnique(mapped.Google, "url_context")
+		case typeName == "google_maps":
+			if err := validateAnthropicServerTool(tool, "google_maps"); err != nil {
+				return err
+			}
+			mapped.Google = appendUnique(mapped.Google, "google_maps")
+		case typeName == "", typeName == "custom":
+			if tool.Name == "" {
+				return fmt.Errorf("tool name is required")
+			}
+			if len(tool.Options) > 0 {
+				fields := make([]string, 0, len(tool.Options))
+				for field := range tool.Options {
+					fields = append(fields, field)
+				}
+				sort.Strings(fields)
+				return fmt.Errorf("custom tool %q has unsupported option %q", tool.Name, fields[0])
+			}
+			parameters := tool.InputSchema
+			if len(parameters) == 0 {
+				parameters = json.RawMessage(`{"type":"object","properties":{}}`)
+			}
+			mapped.Functions = append(mapped.Functions, aistudio.FunctionDeclaration{
+				Name: qualifyResponsesToolName(namespace, tool.Name), Description: tool.Description, Parameters: parameters,
+			})
+		default:
+			return fmt.Errorf("unsupported tool type %q", tool.Type)
+		}
+	}
+	return nil
 }
 
 func validateAnthropicServerTool(tool anthropicTool, name string) error {
