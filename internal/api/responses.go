@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"regexp"
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
@@ -81,13 +82,31 @@ func (request responsesRequest) allTools() []responsesTool {
 	return tools
 }
 
+var invalidFunctionNamePattern = regexp.MustCompile(`[^a-zA-Z0-9_]`)
+
+func sanitizeGeminiFunctionName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	name = invalidFunctionNamePattern.ReplaceAllString(name, "_")
+	if len(name) > 0 && name[0] >= "0"[0] && name[0] <= "9"[0] {
+		name = "_" + name
+	}
+	if len(name) > 63 {
+		name = name[:63]
+	}
+	return name
+}
+
 func qualifyResponsesToolName(namespace, name string) string {
 	namespace = strings.TrimSpace(namespace)
 	name = strings.TrimSpace(name)
-	if namespace == "" || name == "" || name == namespace || strings.HasPrefix(name, namespace+"__") {
-		return name
+	qualified := name
+	if namespace != "" && name != "" && name != namespace && !strings.HasPrefix(name, namespace+"__") {
+		qualified = namespace + "__" + name
 	}
-	return namespace + "__" + name
+	return sanitizeGeminiFunctionName(qualified)
 }
 
 func (request responsesRequest) toolIdentity(qualifiedName string) responsesToolIdentity {

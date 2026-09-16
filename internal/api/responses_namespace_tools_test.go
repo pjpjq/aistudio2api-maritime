@@ -120,3 +120,41 @@ func TestResponseToolCallGeneratesCallIDWhenEmpty(t *testing.T) {
 		t.Fatalf("expected fc_ prefix for item id, got %q", id)
 	}
 }
+
+func TestSanitizeAndRestoreSpecialCharacterToolNames(t *testing.T) {
+	request := responsesRequest{Tools: []responsesTool{{
+		Type: "namespace", Name: "sites", Tools: []responsesTool{
+			{Type: "function", Name: "sites.create_site"},
+			{Type: "function", Name: "custom:action-name"},
+		},
+	}}}
+
+	mapped, err := mapResponsesTools(request.Tools, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mapped.Functions) != 2 {
+		t.Fatalf("expected 2 functions, got %d", len(mapped.Functions))
+	}
+	if mapped.Functions[0].Name != "sites__sites_create_site" {
+		t.Fatalf("expected sites__sites_create_site, got %s", mapped.Functions[0].Name)
+	}
+	if mapped.Functions[1].Name != "sites__custom_action_name" {
+		t.Fatalf("expected sites__custom_action_name, got %s", mapped.Functions[1].Name)
+	}
+
+	// 验证 toolIdentity 能正确还原原始名字
+	item0 := responseToolCall(aistudio.FunctionCall{
+		ID: "call-1", Name: mapped.Functions[0].Name, Arguments: json.RawMessage(`{}`),
+	}, request)
+	if item0["name"] != "sites.create_site" || item0["namespace"] != "sites" {
+		t.Fatalf("expected restored name sites.create_site, got %#v", item0)
+	}
+
+	item1 := responseToolCall(aistudio.FunctionCall{
+		ID: "call-2", Name: mapped.Functions[1].Name, Arguments: json.RawMessage(`{}`),
+	}, request)
+	if item1["name"] != "custom:action-name" || item1["namespace"] != "sites" {
+		t.Fatalf("expected restored name custom:action-name, got %#v", item1)
+	}
+}
