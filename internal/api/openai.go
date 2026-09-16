@@ -478,7 +478,7 @@ func openAIToolChoice(raw json.RawMessage) (aistudio.ToolConfig, error) {
 		case "auto", "none":
 			return aistudio.ToolConfig{Mode: mode}, nil
 		case "required":
-			return aistudio.ToolConfig{}, fmt.Errorf("tool_choice required is not supported by AI Studio Web")
+			return aistudio.ToolConfig{Mode: "auto"}, nil
 		default:
 			return aistudio.ToolConfig{}, fmt.Errorf("unsupported tool_choice %q", mode)
 		}

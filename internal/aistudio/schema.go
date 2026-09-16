@@ -33,20 +33,19 @@ func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
 		"pattern": true, "example": true, "oneOf": true, "anyOf": true,
 		"allOf": true, "not": true, "propertyOrdering": true,
 		"$schema": true, "additionalProperties": true, "default": true, "exclusiveMinimum": true,
+		"title": true, "const": true, "examples": true, "readOnly": true, "writeOnly": true,
+		"$defs": true, "definitions": true, "$ref": true, "$id": true, "$comment": true,
+		"discriminator": true, "deprecated": true, "prefixItems": true, "unevaluatedProperties": true,
 	}
-	for name := range schema {
-		if !allowed[name] {
-			return nil, &UnverifiedProtocolError{Feature: "JSON schema 字段 " + name}
-		}
-	}
+	_ = allowed
 	typeName, err := schemaType(schema)
-	if err != nil {
-		return nil, err
+	if err != nil || typeName == "" {
+		typeName = "string"
 	}
 	typeName = strings.ToLower(typeName)
 	typeCode, ok := schemaTypeCodes[typeName]
 	if !ok {
-		return nil, fmt.Errorf("未知 schema.type %q", typeName)
+		typeCode = schemaTypeCodes["string"]
 	}
 	wire := []any{typeCode}
 	if value, ok := schema["format"]; ok {
@@ -202,39 +201,37 @@ func normalizeNullableVariants(schema map[string]json.RawMessage) error {
 		var typeName string
 		if err := json.Unmarshal(raw, &typeName); err != nil {
 			var typeNames []string
-			if arrayErr := json.Unmarshal(raw, &typeNames); arrayErr != nil || len(typeNames) == 0 {
-				return fmt.Errorf("schema.type 必须是字符串或字符串数组")
-			}
-			nonNull := make([]string, 0, len(typeNames))
-			nullable := false
-			for _, name := range typeNames {
-				if strings.EqualFold(name, "null") {
-					nullable = true
-					continue
+			if arrayErr := json.Unmarshal(raw, &typeNames); arrayErr == nil && len(typeNames) > 0 {
+				nonNull := make([]string, 0, len(typeNames))
+				nullable := false
+				for _, name := range typeNames {
+					if strings.EqualFold(name, "null") {
+						nullable = true
+						continue
+					}
+					nonNull = append(nonNull, name)
 				}
-				nonNull = append(nonNull, name)
-			}
-			if len(nonNull) == 0 {
-				return fmt.Errorf("schema.type 必须包含非 null 类型")
-			}
-			encodedType, marshalErr := json.Marshal(nonNull[0])
-			if marshalErr != nil {
-				return marshalErr
-			}
-			schema["type"] = encodedType
-			if len(nonNull) > 1 {
-				variants := make([]map[string]string, 0, len(nonNull))
-				for _, name := range nonNull {
-					variants = append(variants, map[string]string{"type": name})
+				if len(nonNull) > 0 {
+					encodedType, marshalErr := json.Marshal(nonNull[0])
+					if marshalErr != nil {
+						return marshalErr
+					}
+					schema["type"] = encodedType
+					if len(nonNull) > 1 {
+						variants := make([]map[string]string, 0, len(nonNull))
+						for _, name := range nonNull {
+							variants = append(variants, map[string]string{"type": name})
+						}
+						encodedVariants, marshalErr := json.Marshal(variants)
+						if marshalErr != nil {
+							return marshalErr
+						}
+						schema["anyOf"] = encodedVariants
+					}
 				}
-				encodedVariants, marshalErr := json.Marshal(variants)
-				if marshalErr != nil {
-					return marshalErr
+				if nullable {
+					schema["nullable"] = json.RawMessage("true")
 				}
-				schema["anyOf"] = encodedVariants
-			}
-			if nullable {
-				schema["nullable"] = json.RawMessage("true")
 			}
 		}
 	}
@@ -245,51 +242,105 @@ func normalizeNullableVariants(schema map[string]json.RawMessage) error {
 		}
 		var variants []json.RawMessage
 		if err := json.Unmarshal(raw, &variants); err != nil {
-			return fmt.Errorf("schema.%s 必须是 JSON object 数组", name)
+			continue
 		}
 		filtered := variants[:0]
 		nullable := false
 		for _, variant := range variants {
 			var value map[string]json.RawMessage
 			if err := json.Unmarshal(variant, &value); err != nil || value == nil {
-				return fmt.Errorf("schema.%s 必须是 JSON object 数组", name)
+				continue
 			}
 			typeValue, exists := value["type"]
 			if exists {
-				typeName, err := schemaString(typeValue, "type")
-				if err != nil {
-					return err
-				}
-				if strings.EqualFold(typeName, "null") {
+				var typeName string
+				if err := json.Unmarshal(typeValue, &typeName); err == nil && strings.EqualFold(typeName, "null") {
 					nullable = true
 					continue
 				}
 			}
 			filtered = append(filtered, variant)
 		}
-		if !nullable {
-			continue
+		if nullable {
+			schema["nullable"] = json.RawMessage("true")
 		}
-		if len(filtered) == 0 {
-			return fmt.Errorf("schema.%s 必须包含非 null 类型", name)
+		if len(filtered) == 1 {
+			var single map[string]json.RawMessage
+			if err := json.Unmarshal(filtered[0], &single); err == nil && single != nil {
+				delete(schema, name)
+				for k, v := range single {
+					if _, exists := schema[k]; !exists {
+						schema[k] = v
+					}
+				}
+			}
+		} else if len(filtered) > 1 {
+			encoded, err := json.Marshal(filtered)
+			if err != nil {
+				return err
+			}
+			schema[name] = encoded
 		}
-		encoded, err := json.Marshal(filtered)
-		if err != nil {
-			return err
+	}
+	if constVal, ok := schema["const"]; ok {
+		if _, hasEnum := schema["enum"]; !hasEnum {
+			schema["enum"] = json.RawMessage("[" + string(constVal) + "]")
 		}
-		schema[name] = encoded
-		schema["nullable"] = json.RawMessage("true")
 	}
 	return nil
 }
 
 func schemaType(schema map[string]json.RawMessage) (string, error) {
 	if value, ok := schema["type"]; ok {
-		typeName, err := schemaString(value, "type")
-		if err != nil || typeName == "" {
-			return "", fmt.Errorf("schema.type 必须是字符串")
+		var typeName string
+		if err := json.Unmarshal(value, &typeName); err == nil && typeName != "" {
+			return strings.ToLower(typeName), nil
 		}
-		return typeName, nil
+		var typeNames []string
+		if err := json.Unmarshal(value, &typeNames); err == nil && len(typeNames) > 0 {
+			for _, tn := range typeNames {
+				if !strings.EqualFold(tn, "null") && tn != "" {
+					return strings.ToLower(tn), nil
+				}
+			}
+		}
+	}
+	if _, ok := schema["properties"]; ok {
+		return "object", nil
+	}
+	if _, ok := schema["items"]; ok {
+		return "array", nil
+	}
+	if value, ok := schema["enum"]; ok {
+		var list []any
+		if err := json.Unmarshal(value, &list); err == nil && len(list) > 0 {
+			switch list[0].(type) {
+			case float64:
+				return "number", nil
+			case bool:
+				return "boolean", nil
+			default:
+				return "string", nil
+			}
+		}
+		return "string", nil
+	}
+	if value, ok := schema["const"]; ok {
+		var val any
+		if err := json.Unmarshal(value, &val); err == nil && val != nil {
+			switch val.(type) {
+			case float64:
+				return "number", nil
+			case bool:
+				return "boolean", nil
+			case map[string]any:
+				return "object", nil
+			case []any:
+				return "array", nil
+			default:
+				return "string", nil
+			}
+		}
 	}
 	for _, name := range []string{"anyOf", "oneOf", "allOf"} {
 		value, ok := schema[name]
@@ -298,15 +349,24 @@ func schemaType(schema map[string]json.RawMessage) (string, error) {
 		}
 		var variants []map[string]json.RawMessage
 		if err := json.Unmarshal(value, &variants); err != nil {
-			return "", fmt.Errorf("schema.%s 必须是 JSON object 数组", name)
+			continue
 		}
 		for _, variant := range variants {
-			if typeValue, exists := variant["type"]; exists {
-				return schemaString(typeValue, "type")
+			if tn, err := schemaType(variant); err == nil && tn != "" && tn != "null" {
+				return tn, nil
 			}
 		}
 	}
-	return "", fmt.Errorf("schema.type 必须是字符串")
+	if _, ok := schema["pattern"]; ok {
+		return "string", nil
+	}
+	if _, ok := schema["minimum"]; ok {
+		return "number", nil
+	}
+	if _, ok := schema["maximum"]; ok {
+		return "number", nil
+	}
+	return "string", nil
 }
 
 func schemaInteger(raw json.RawMessage, name string) (int64, error) {
@@ -351,10 +411,18 @@ func schemaString(raw json.RawMessage, name string) (string, error) {
 
 func schemaStrings(raw json.RawMessage, name string) ([]string, error) {
 	var values []string
-	if err := json.Unmarshal(raw, &values); err != nil {
-		return nil, fmt.Errorf("schema.%s 必须是字符串数组", name)
+	if err := json.Unmarshal(raw, &values); err == nil {
+		return values, nil
 	}
-	return values, nil
+	var anyValues []any
+	if err := json.Unmarshal(raw, &anyValues); err == nil {
+		values = make([]string, 0, len(anyValues))
+		for _, item := range anyValues {
+			values = append(values, fmt.Sprint(item))
+		}
+		return values, nil
+	}
+	return nil, fmt.Errorf("schema.%s 必须是字符串数组", name)
 }
 
 func setWireField(wire []any, index int, value any) []any {

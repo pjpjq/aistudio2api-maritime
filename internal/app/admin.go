@@ -107,6 +107,9 @@ func newRuntimeAdmin(
 		service.onNoEligible = func() {
 			admin.triggerRecovery()
 		}
+		service.onNoEligibleSync = func(ctx context.Context) bool {
+			return admin.recoverNow(ctx)
+		}
 	}
 	go admin.autoRecoverAuthRequired(lifecycle)
 	return admin
@@ -519,6 +522,41 @@ func (admin *runtimeAdmin) triggerRecovery() {
 	case admin.recoverTrigger <- struct{}{}:
 	default:
 	}
+}
+
+func (admin *runtimeAdmin) recoverNow(ctx context.Context) bool {
+	if admin == nil || admin.pool == nil {
+		return false
+	}
+	statuses := admin.pool.Status()
+	var authRequiredIDs []string
+	for _, st := range statuses {
+		if !st.Enabled {
+			continue
+		}
+		if st.State == aistudio.AccountReady || st.State == aistudio.AccountBusy {
+			return true
+		} else if st.State == aistudio.AccountAuthRequired {
+			authRequiredIDs = append(authRequiredIDs, st.ID)
+		}
+	}
+	if len(authRequiredIDs) == 0 {
+		return false
+	}
+	admin.requests.log("service", "INFO", fmt.Sprintf(
+		"同步热恢复 | 正在即时重连 %d 个掉线账号", len(authRequiredIDs),
+	))
+	recovered := false
+	for _, id := range authRequiredIDs {
+		if _, err := admin.VerifyAccount(ctx, id); err != nil {
+			admin.requests.log("service", "WARNING", fmt.Sprintf("即时重连账号 %s 失败: %v", id, err))
+		} else {
+			admin.requests.log("service", "INFO", fmt.Sprintf("即时重连账号 %s 成功", id))
+			recovered = true
+			break
+		}
+	}
+	return recovered
 }
 
 func (admin *runtimeAdmin) autoRecoverAuthRequired(ctx context.Context) {

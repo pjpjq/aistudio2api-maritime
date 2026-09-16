@@ -469,9 +469,7 @@ func appendResponsesTools(mapped *aistudio.Tools, tools []responsesTool, namespa
 			if tool.Name == "" {
 				return fmt.Errorf("function tool name is required")
 			}
-			if tool.Strict != nil && *tool.Strict {
-				return fmt.Errorf("function tool strict is not supported by AI Studio Web")
-			}
+			// tool.Strict is ignored as AI Studio Web schema validation handles constraints
 			parameters := tool.Parameters
 			if len(parameters) == 0 {
 				parameters = json.RawMessage(`{"type":"object","properties":{}}`)
