@@ -1,6 +1,7 @@
 package chromeauth
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -72,16 +73,10 @@ func Import(ctx context.Context, options ImportOptions) ([]ImportResult, error) 
 	if err != nil {
 		return nil, err
 	}
-	masterKey, err := retrieveV20Key(options.ChromeRoot)
-	if err != nil {
-		return nil, err
-	}
-	if len(masterKey) != 32 {
-		return nil, fmt.Errorf("Chrome v20 主密钥长度异常")
-	}
+	keyCache := make(map[string][]byte)
 	results := make([]ImportResult, 0, len(selected))
 	for _, account := range selected {
-		result, err := importAccount(ctx, options.ChromeRoot, proxyURL, account, masterKey)
+		result, err := importAccount(ctx, options.ChromeRoot, proxyURL, account, keyCache)
 		if err != nil {
 			return nil, fmt.Errorf("导入 %s: %w", account.Profile, err)
 		}
@@ -92,9 +87,6 @@ func Import(ctx context.Context, options ImportOptions) ([]ImportResult, error) 
 
 // Refresh 使用保存的设备绑定材料重新签发 Google Cookie
 func Refresh(ctx context.Context, material aistudio.ChromeOAuthMaterial, proxy string) ([]aistudio.StateCookie, error) {
-	if err := ensurePlatformImport(); err != nil {
-		return nil, err
-	}
 	proxyURL, err := validateProxy(proxy)
 	if err != nil {
 		return nil, err
@@ -106,12 +98,33 @@ func Refresh(ctx context.Context, material aistudio.ChromeOAuthMaterial, proxy s
 	return toStorageCookies(cookies), nil
 }
 
-func importAccount(ctx context.Context, chromeRoot string, proxy string, account Account, masterKey []byte) (ImportResult, error) {
+func importAccount(ctx context.Context, chromeRoot string, proxy string, account Account, keyCache map[string][]byte) (ImportResult, error) {
 	gaiaID, encryptedToken, wrappedKey, err := readTokenService(chromeRoot, account.Profile)
 	if err != nil {
 		return ImportResult{}, err
 	}
-	token, err := decryptV20Token(masterKey, encryptedToken)
+	version := string(encryptedToken[:min(len(encryptedToken), 3)])
+	if version != "v10" && version != "v20" {
+		return ImportResult{}, fmt.Errorf("refresh token 密文版本不支持: %s", version)
+	}
+	masterKey, ok := keyCache[version]
+	if !ok {
+		masterKey, err = retrieveTokenKey(chromeRoot, version)
+		if err != nil {
+			return ImportResult{}, err
+		}
+		if (version == "v10" && len(masterKey) != 16) || (version == "v20" && len(masterKey) != 32) {
+			return ImportResult{}, fmt.Errorf("Chrome %s 主密钥长度异常", version)
+		}
+		keyCache[version] = append([]byte(nil), masterKey...)
+	}
+	var token string
+	switch version {
+	case "v10":
+		token, err = decryptV10Token(masterKey, encryptedToken)
+	case "v20":
+		token, err = decryptV20Token(masterKey, encryptedToken)
+	}
 	if err != nil {
 		return ImportResult{}, err
 	}
@@ -229,6 +242,38 @@ func decryptV20Token(masterKey []byte, encrypted []byte) (string, error) {
 	}
 	token := string(plaintext)
 	if len(token) != 103 || !strings.HasPrefix(token, "1//0") {
+		return "", fmt.Errorf("refresh token 解密结果格式异常")
+	}
+	return token, nil
+}
+
+func decryptV10Token(masterKey []byte, encrypted []byte) (string, error) {
+	if len(masterKey) != 16 || len(encrypted) < 3+aes.BlockSize || string(encrypted[:3]) != "v10" {
+		return "", fmt.Errorf("refresh token v10 密文格式异常")
+	}
+	block, err := aes.NewCipher(masterKey)
+	if err != nil {
+		return "", fmt.Errorf("创建 AES 解密器: %w", err)
+	}
+	ciphertext := encrypted[3:]
+	if len(ciphertext)%aes.BlockSize != 0 {
+		return "", fmt.Errorf("refresh token v10 密文长度异常")
+	}
+	plaintext := make([]byte, len(ciphertext))
+	iv := bytes.Repeat([]byte{' '}, aes.BlockSize)
+	for offset := 0; offset < len(ciphertext); offset += aes.BlockSize {
+		block.Decrypt(plaintext[offset:offset+aes.BlockSize], ciphertext[offset:offset+aes.BlockSize])
+		for index := 0; index < aes.BlockSize; index++ {
+			plaintext[offset+index] ^= iv[index]
+		}
+		iv = ciphertext[offset : offset+aes.BlockSize]
+	}
+	padding := int(plaintext[len(plaintext)-1])
+	if padding < 1 || padding > aes.BlockSize || padding > len(plaintext) || !bytes.Equal(plaintext[len(plaintext)-padding:], bytes.Repeat([]byte{byte(padding)}, padding)) {
+		return "", fmt.Errorf("refresh token v10 填充校验失败")
+	}
+	token := string(plaintext[:len(plaintext)-padding])
+	if len(token) < 30 || !strings.HasPrefix(token, "1//") {
 		return "", fmt.Errorf("refresh token 解密结果格式异常")
 	}
 	return token, nil

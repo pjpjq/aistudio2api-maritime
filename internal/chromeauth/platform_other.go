@@ -1,21 +1,21 @@
-//go:build !windows
+//go:build !windows && !darwin
 
 package chromeauth
 
 import "fmt"
 
 func defaultChromeRoot() (string, error) {
-	return "", fmt.Errorf("Chrome OAuth 导入仅支持 Windows")
+	return "", fmt.Errorf("Chrome OAuth 导入仅支持 Windows 或 macOS")
 }
 
 func ensurePlatformImport() error {
-	return fmt.Errorf("Chrome OAuth 导入仅支持 Windows")
+	return fmt.Errorf("Chrome OAuth 导入仅支持 Windows 或 macOS")
 }
 
-func discoverPlatform(string) ([]Account, error) {
-	return nil, fmt.Errorf("Chrome OAuth 导入仅支持 Windows")
+func platformImportable([]byte, []byte) bool {
+	return false
 }
 
-func readTokenService(string, string) (string, []byte, []byte, error) {
-	return "", nil, nil, fmt.Errorf("Chrome OAuth 导入仅支持 Windows")
+func retrieveTokenKey(string, string) ([]byte, error) {
+	return nil, fmt.Errorf("Chrome OAuth 导入仅支持 Windows 或 macOS")
 }

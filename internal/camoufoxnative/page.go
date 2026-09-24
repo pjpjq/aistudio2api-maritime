@@ -48,6 +48,26 @@ const submitPromptExpression = `(() => {` + pageDOMHelpers + `
   return true;
 })()`
 
+// submitPromptReadyExpression 等待官网当前可见且启用的提交按钮
+const submitPromptReadyExpression = `(() => {` + pageDOMHelpers + `
+  const items = [...document.querySelectorAll('ms-run-button button')].filter(visible);
+  return items.length === 1 && buttonEnabled(items[0]);
+})()`
+
+// submitPromptDiagnosticExpression 返回提交按钮与弹层的结构化状态，不读取页面文本
+const submitPromptDiagnosticExpression = `(() => {` + pageDOMHelpers + `
+  const button = [...document.querySelectorAll('ms-run-button button')].find(visible);
+  const ancestor = button?.parentElement?.closest('[aria-disabled]');
+  const dialogs = [...document.querySelectorAll('[role="dialog"], mat-dialog-container')].filter(visible);
+  return JSON.stringify({
+    button: Boolean(button),
+    disabled: button?.matches(':disabled') ?? null,
+    buttonAriaDisabled: button?.getAttribute('aria-disabled') ?? null,
+    ancestorAriaDisabled: ancestor?.getAttribute('aria-disabled') ?? null,
+    visibleDialogs: dialogs.length,
+  });
+})()`
+
 // dismissOverlaysExpression 关闭官网已知且可交互的启动弹层
 const dismissOverlaysExpression = `(() => {` + pageDOMHelpers + `
   const selectors = [

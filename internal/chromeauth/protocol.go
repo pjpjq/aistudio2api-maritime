@@ -62,6 +62,25 @@ type deviceBindingKey interface {
 }
 
 func fetchGoogleCookies(ctx context.Context, gaiaID string, token string, wrappedKey []byte, proxyURL string) ([]multiloginCookie, error) {
+	client, err := newOAuthClient(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	defer client.CloseIdleConnections()
+	if len(wrappedKey) == 0 {
+		status, response, err := requestMultilogin(ctx, client, gaiaID, token, "")
+		if err != nil {
+			return nil, err
+		}
+		if status != http.StatusOK || response.Status != "OK" {
+			return nil, fmt.Errorf("OAuthMultilogin 单步阶段失败 HTTP %d status %s", status, response.Status)
+		}
+		if err := validateMultiloginCookies(response.Cookies); err != nil {
+			return nil, err
+		}
+		return response.Cookies, nil
+	}
+
 	bindingKey, err := openDeviceBindingKey(wrappedKey)
 	if err != nil {
 		return nil, err
@@ -71,11 +90,6 @@ func fetchGoogleCookies(ctx context.Context, gaiaID string, token string, wrappe
 	if err != nil {
 		return nil, err
 	}
-	client, err := newOAuthClient(proxyURL)
-	if err != nil {
-		return nil, err
-	}
-	defer client.CloseIdleConnections()
 
 	firstStatus, first, err := requestMultilogin(ctx, client, gaiaID, token, assertionSentinel)
 	if err != nil {
@@ -104,31 +118,43 @@ func fetchGoogleCookies(ctx context.Context, gaiaID string, token string, wrappe
 	if len(second.Directed) == 0 || bytes.Equal(second.Directed, []byte("null")) {
 		return nil, fmt.Errorf("OAuthMultilogin 响应缺少 token_binding_directed_response")
 	}
-	if len(second.Cookies) == 0 {
-		return nil, fmt.Errorf("OAuthMultilogin 响应缺少 Cookie")
+	if err := validateMultiloginCookies(second.Cookies); err != nil {
+		return nil, err
 	}
 
-	names := make(map[string]struct{}, len(second.Cookies))
 	for index := range second.Cookies {
 		cookie := &second.Cookies[index]
-		if cookie.Name == "" || cookie.Value == "" {
-			return nil, fmt.Errorf("OAuthMultilogin Cookie 格式异常")
-		}
 		cookie.Value, err = hpkeOpen(ephemeralPrivateKey, cookie.Value)
 		if err != nil {
 			return nil, err
 		}
+	}
+	if err := validateMultiloginCookies(second.Cookies); err != nil {
+		return nil, err
+	}
+	return second.Cookies, nil
+}
+
+func validateMultiloginCookies(cookies []multiloginCookie) error {
+	if len(cookies) == 0 {
+		return fmt.Errorf("OAuthMultilogin 响应缺少 Cookie")
+	}
+	names := make(map[string]struct{}, len(cookies))
+	for _, cookie := range cookies {
+		if cookie.Name == "" || cookie.Value == "" {
+			return fmt.Errorf("OAuthMultilogin Cookie 格式异常")
+		}
 		if cookie.Domain == "" && (cookie.Host == "" || strings.HasPrefix(cookie.Host, ".")) {
-			return nil, fmt.Errorf("OAuthMultilogin Cookie 域格式异常")
+			return fmt.Errorf("OAuthMultilogin Cookie 域格式异常")
 		}
 		names[cookie.Name] = struct{}{}
 	}
 	for _, required := range []string{"SAPISID", "__Secure-1PSID"} {
 		if _, ok := names[required]; !ok {
-			return nil, fmt.Errorf("OAuthMultilogin 缺少核心 Cookie: %s", required)
+			return fmt.Errorf("OAuthMultilogin 缺少核心 Cookie: %s", required)
 		}
 	}
-	return second.Cookies, nil
+	return nil
 }
 
 func newOAuthClient(proxyURL string) (tls_client.HttpClient, error) {
@@ -189,7 +215,9 @@ func findChallenge(response multiloginResponse) string {
 func encodeMultiOAuthHeader(gaiaID string, token string, assertion string) string {
 	account := appendBytesField(nil, 1, []byte(gaiaID))
 	account = appendBytesField(account, 2, []byte(token))
-	account = appendBytesField(account, 3, []byte(assertion))
+	if assertion != "" {
+		account = appendBytesField(account, 3, []byte(assertion))
+	}
 	return base64.RawURLEncoding.EncodeToString(appendBytesField(nil, 1, account))
 }
 

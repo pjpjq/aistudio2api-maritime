@@ -275,6 +275,10 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 	if interceptID == "" {
 		return errors.New("GenerateContent 拦截 ID 无效")
 	}
+	if err := client.waitFor(ctx, contextID, submitPromptReadyExpression, 5*time.Second); err != nil {
+		diagnostic, _ := client.evaluateString(ctx, contextID, submitPromptDiagnosticExpression)
+		return fmt.Errorf("等待官网 Run 按钮启用: %w state=%s", err, diagnostic)
+	}
 	if _, err := client.evaluate(ctx, contextID, submitPromptExpression); err != nil {
 		return fmt.Errorf("提交官网提示词: %w", err)
 	}
