@@ -1,0 +1,127 @@
+name: Sync AIStudio2API upstream
+
+on:
+  push:
+    branches: [main, "codex/**"]
+  pull_request:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      redeploy:
+        description: Rebuild and verify main even when the version is unchanged
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: maritime-upstream-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: python3 -m unittest discover -s tests -v
+      - name: Build and smoke-test main deployment contract
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        run: bash scripts/smoke_image.sh
+
+  update:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Restore successful check timestamp
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .upstream-check-state
+          key: maritime-check-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: maritime-check-
+      - name: Check five-hour interval
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            python3 scripts/upstream.py gate --force
+          else
+            python3 scripts/upstream.py gate
+          fi
+      - name: Resolve and pin the official stable release
+        if: steps.gate.outputs.due == 'true'
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/upstream.py check
+      - name: Verify deployment credential before modifying main
+        if: steps.check.outputs.changed == 'true' || inputs.redeploy
+        env:
+          MARITIME_TOKEN: ${{ secrets.MARITIME_TOKEN }}
+        run: test -n "$MARITIME_TOKEN"
+      - name: Build and smoke-test the candidate
+        if: steps.check.outputs.changed == 'true' || inputs.redeploy
+        run: bash scripts/smoke_image.sh
+      - name: Persist the validated version in main
+        if: steps.check.outputs.changed == 'true' || inputs.redeploy
+        id: commit
+        env:
+          CHANGED: ${{ steps.check.outputs.changed }}
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [[ "$CHANGED" == true ]]; then
+            git add Dockerfile
+            git commit -m "build(maritime): 自动同步上游 $VERSION"
+            git push origin HEAD:main
+          else
+            git fetch origin main
+            test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Deploy main and verify Flash and Argon schema regression
+        if: steps.commit.outcome == 'success'
+        id: deploy
+        env:
+          MARITIME_TOKEN: ${{ secrets.MARITIME_TOKEN }}
+          VERSION: ${{ steps.check.outputs.version }}
+          PREVIOUS_VERSION: ${{ steps.check.outputs.previous_version }}
+        run: python3 scripts/deploy.py --version "$VERSION" --previous-version "$PREVIOUS_VERSION"
+      - name: Restore main and deployment after candidate failure
+        if: failure() && steps.deploy.outcome == 'failure'
+        env:
+          MARITIME_TOKEN: ${{ secrets.MARITIME_TOKEN }}
+          CHANGED: ${{ steps.check.outputs.changed }}
+          CANDIDATE_SHA: ${{ steps.commit.outputs.sha }}
+          PREVIOUS_VERSION: ${{ steps.check.outputs.previous_version }}
+        run: |
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$CANDIDATE_SHA"
+          if [[ "$CHANGED" == true ]]; then
+            git revert --no-edit "$CANDIDATE_SHA"
+            git push origin HEAD:main
+          fi
+          if [[ -f .deployment-started ]]; then
+            python3 scripts/deploy.py --version "$PREVIOUS_VERSION" --previous-version "$PREVIOUS_VERSION" --rollback
+          fi
+      - name: Record only a fully successful check/update
+        if: success() && steps.gate.outputs.due == 'true'
+        run: python3 scripts/upstream.py record
+      - name: Save successful check timestamp
+        if: success() && steps.gate.outputs.due == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .upstream-check-state
+          key: maritime-check-${{ github.run_id }}-${{ github.run_attempt }}

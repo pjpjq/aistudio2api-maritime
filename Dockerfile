@@ -6,11 +6,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libxrandr2 libxss1 \
     libxt6 libxtst6 libegl1 libegl-mesa0 libgl1-mesa-dri xvfb python3 curl unzip && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+ARG AISTUDIO_VERSION=v0.2.13
+ARG AISTUDIO_SHA256=31c5b16e5a2e84e932dcbc13364f04e58b7bd0c6a699cc1465c5d7443d4e6e51
 RUN curl -L --fail --retry 3 --retry-delay 2 \
       -o /tmp/aistudio2api.tar.gz \
-      https://github.com/Mag1cFall/AIStudio2API/releases/download/v0.2.13/aistudio2api-v0.2.13-linux-amd64.tar.gz \
-    && echo '31c5b16e5a2e84e932dcbc13364f04e58b7bd0c6a699cc1465c5d7443d4e6e51  /tmp/aistudio2api.tar.gz' | sha256sum -c - \
-    && tar -xzf /tmp/aistudio2api.tar.gz -C /app --strip-components=1 aistudio2api-v0.2.13-linux-amd64/aistudio2api \
+      "https://github.com/Mag1cFall/AIStudio2API/releases/download/$AISTUDIO_VERSION/aistudio2api-$AISTUDIO_VERSION-linux-amd64.tar.gz" \
+    && echo "$AISTUDIO_SHA256  /tmp/aistudio2api.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/aistudio2api.tar.gz -C /app --strip-components=1 "aistudio2api-$AISTUDIO_VERSION-linux-amd64/aistudio2api" \
     && rm -f /tmp/aistudio2api.tar.gz
 COPY entrypoint.sh /app/entrypoint.sh
 COPY maritime_proxy.py /app/maritime_proxy.py
