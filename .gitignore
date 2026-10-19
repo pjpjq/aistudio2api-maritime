@@ -23,3 +23,9 @@ go.work
 .idea/
 .DS_Store
 Thumbs.db
+
+# 自动更新检查与部署状态
+__pycache__/
+.upstream-check-state
+.deployment-baseline.json
+.deployment-started
