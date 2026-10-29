@@ -6,8 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libxrandr2 libxss1 \
     libxt6 libxtst6 libegl1 libegl-mesa0 libgl1-mesa-dri xvfb python3 curl unzip && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-ARG AISTUDIO_VERSION=v0.2.16
-ARG AISTUDIO_SHA256=e591b5f90a7654c3a0b9adf2736f6619a3a79b96b36d1a9f83e2cf3b7d5bcb90
+ARG AISTUDIO_VERSION=v0.2.17
+ARG AISTUDIO_SHA256=aa7e7705f9c98460cbb412695deaeac8f1e57828c1c63cb2fa633e3d418b09b7
 RUN curl -L --fail --retry 3 --retry-delay 2 \
       -o /tmp/aistudio2api.tar.gz \
       "https://github.com/Mag1cFall/AIStudio2API/releases/download/$AISTUDIO_VERSION/aistudio2api-$AISTUDIO_VERSION-linux-amd64.tar.gz" \
