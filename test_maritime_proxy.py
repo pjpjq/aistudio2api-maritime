@@ -2,6 +2,7 @@ import io
 import json
 import os
 import unittest
+import urllib.request
 from email.message import Message
 from unittest.mock import Mock, patch
 
@@ -120,7 +121,7 @@ class KeepaliveLoginTests(unittest.TestCase):
     @patch("aistudio_admin.urllib.request.urlopen")
     def test_other_origins_never_receive_credentials(self, urlopen, build_opener):
         for url in ["https://other.example.test/api/status", "http://console.example.test/api/status"]:
-            request = __import__("urllib.request", fromlist=["Request"]).Request(url)
+            request = urllib.request.Request(url)
             with admin_urlopen(request, timeout=3):
                 pass
             self.assertIs(urlopen.call_args.args[0], request)
@@ -129,7 +130,7 @@ class KeepaliveLoginTests(unittest.TestCase):
     @patch.dict(os.environ, credentials, clear=True)
     @patch("aistudio_admin.urllib.request.build_opener")
     def test_matching_origin_logs_in_and_logs_out(self, build_opener):
-        request = __import__("urllib.request", fromlist=["Request"]).Request("https://console.example.test/api/status")
+        request = urllib.request.Request("https://console.example.test/api/status")
         with admin_urlopen(request, timeout=3):
             pass
         calls = build_opener.return_value.open.call_args_list
@@ -143,7 +144,7 @@ class KeepaliveLoginTests(unittest.TestCase):
     @patch.dict(os.environ, credentials, clear=True)
     @patch("aistudio_admin.urllib.request.build_opener")
     def test_failed_probe_still_logs_out(self, build_opener):
-        request = __import__("urllib.request", fromlist=["Request"]).Request("https://console.example.test/api/status")
+        request = urllib.request.Request("https://console.example.test/api/status")
         with self.assertRaises(ValueError):
             with admin_urlopen(request, timeout=3):
                 raise ValueError("dummy probe failure")
