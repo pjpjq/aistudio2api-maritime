@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 from maritime_proxy import Handler, UPSTREAM
 from aistudio_admin import admin_urlopen
+from scripts import deploy
 
 
 class ProxyTests(unittest.TestCase):
@@ -149,6 +150,30 @@ class KeepaliveLoginTests(unittest.TestCase):
             with admin_urlopen(request, timeout=3):
                 raise ValueError("dummy probe failure")
         self.assertEqual(build_opener.return_value.open.call_args.args[0].full_url, "https://console.example.test/api/auth/logout")
+
+
+class DeploymentLoginTests(unittest.TestCase):
+    def test_release_probe_supports_native_login_and_legacy_mode(self):
+        for enabled in [False, True]:
+            with self.subTest(admin_enabled=enabled):
+                environment = {"PROXY_API_KEY": "dummy-api-key"}
+                if enabled:
+                    environment.update({"ADMIN_AUTH_ENABLED": "true", "ADMIN_USERNAME": "dummy-admin", "ADMIN_PASSWORD": "dummy-password"})
+                process = Mock()
+                process.name = "123"
+                raw_environment = b"\0".join((key + "=" + value).encode() for key, value in environment.items())
+                process.joinpath.side_effect = lambda name: Mock(read_bytes=Mock(return_value=b"/app/aistudio2api\0" if name == "cmdline" else raw_environment))
+                response = io.BytesIO(json.dumps({"version": "v0.3.2", "ready": True}).encode())
+                opener = Mock()
+                opener.open.side_effect = [io.BytesIO(), response, io.BytesIO()] if enabled else [response]
+                with patch("pathlib.Path.iterdir", return_value=[process]), patch("urllib.request.build_opener", return_value=opener), patch("builtins.print") as output:
+                    exec(deploy.PROBE, {"EXPECTED": "v0.3.2", "INFERENCE": False, "PUBLIC": "https://console.example.test"})
+                self.assertTrue(json.loads(output.call_args.args[0])["ready"])
+                calls = opener.open.call_args_list
+                self.assertEqual(len(calls), 3 if enabled else 1)
+                if enabled:
+                    self.assertTrue(calls[0].args[0].full_url.endswith("/api/auth/login"))
+                    self.assertTrue(calls[-1].args[0].full_url.endswith("/api/auth/logout"))
 
 
 if __name__ == "__main__":
