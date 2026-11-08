@@ -27,10 +27,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.proxy()
 
+    def do_PUT(self):
+        self.proxy()
+
     def proxy(self):
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length) if length else None
-        headers = {k: v for k, v in self.headers.items() if k.lower() not in {"host", "content-length"}}
+        headers = {k: v for k, v in self.headers.items() if k.lower() != "content-length"}
         authorization = headers.get("Authorization", "")
         if authorization.lower().startswith("bearer ") and "X-API-Key" not in headers:
             headers["X-API-Key"] = authorization[7:].strip()
@@ -55,6 +58,7 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
-port = int(os.environ.get("PORT", "18789"))
-server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
-server.serve_forever()
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "18789"))
+    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    server.serve_forever()

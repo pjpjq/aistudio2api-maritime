@@ -1,0 +1,54 @@
+name: Maritime proxy regression
+
+on:
+  push:
+    branches: [codex/aistudio-admin-put-fix]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proxy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check startup syntax
+        run: sh -n entrypoint.sh
+      - name: Run regressions without network or host credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/proxy-test-root"
+          sudo mkdir -p "$root"
+          sudo unshare --mount --net --pid --fork bash -s -- "$root" "$GITHUB_WORKSPACE" <<'SANDBOX'
+          set -euo pipefail
+          root="$1"
+          source="$2"
+          mount --make-rprivate /
+          mkdir -p "$root"/{usr,src,work,dev,etc}
+          chmod 755 "$root"
+          mount --bind /usr "$root/usr"
+          mount -o remount,bind,ro "$root/usr"
+          mount --bind "$source" "$root/src"
+          mount -o remount,bind,ro "$root/src"
+          ln -s usr/bin "$root/bin"
+          ln -s usr/lib "$root/lib"
+          ln -s usr/lib64 "$root/lib64"
+          touch "$root/dev/null" "$root/dev/urandom" "$root/etc/ld.so.cache"
+          mount --bind /dev/null "$root/dev/null"
+          mount --bind /dev/urandom "$root/dev/urandom"
+          mount --bind /etc/ld.so.cache "$root/etc/ld.so.cache"
+          mount -t tmpfs -o size=16m,nodev,nosuid tmpfs "$root/work"
+          chmod 777 "$root/work"
+          mount --bind "$root" "$root"
+          mount -o remount,bind,ro "$root"
+          chroot "$root" /usr/bin/env -i HOME=/work TMPDIR=/work LANG=C.UTF-8 PATH=/usr/bin:/bin \
+            /usr/bin/setpriv --reuid=65534 --regid=65534 --clear-groups --bounding-set=-all --no-new-privs \
+            /usr/bin/prlimit --as=268435456 --cpu=15 --nproc=32 --nofile=64 --fsize=1048576 \
+            /usr/bin/python3 -I -B -c \
+            'import sys,unittest; sys.path.insert(0,"/src"); unittest.main(module="test_maritime_proxy",argv=["test_maritime_proxy","-v"])'
+          SANDBOX
