@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 ARG AISTUDIO_VERSION=v0.3.2
 ARG AISTUDIO_SHA256=7a5984be026695e48e9ead04275eb4d6b2e9d8b39e78182a07b998ad5c93454a
+ARG CAMOUFOX_URL=https://github.com/daijro/camoufox/releases/download/v152.0.4-beta.29/camoufox-152.0.4-beta.29-lin.x86_64.zip
 RUN curl -L --fail --retry 3 --retry-delay 2 \
       -o /tmp/aistudio2api.tar.gz \
       "https://github.com/Mag1cFall/AIStudio2API/releases/download/$AISTUDIO_VERSION/aistudio2api-$AISTUDIO_VERSION-linux-amd64.tar.gz" \
@@ -17,12 +18,8 @@ RUN curl -L --fail --retry 3 --retry-delay 2 \
 COPY entrypoint.sh /app/entrypoint.sh
 COPY maritime_proxy.py /app/maritime_proxy.py
 RUN set -eux; \
-    mkdir -p /app/runtime/camoufox /data/auth; \
-    curl -L --fail --retry 3 --retry-delay 2 \
-      -o /tmp/camoufox.zip \
-      https://github.com/daijro/camoufox/releases/download/v152.0.4-beta.29/camoufox-152.0.4-beta.29-lin.x86_64.zip; \
-    unzip -q /tmp/camoufox.zip -d /app/runtime/camoufox; \
-    chmod 755 /app/entrypoint.sh /app/aistudio2api /app/runtime/camoufox/camoufox-bin; \
-    rm -f /tmp/camoufox.zip
+    mkdir -p /app/runtime /data/auth; \
+    ln -s /data/aistudio2api/runtime/camoufox /app/runtime/camoufox; \
+    chmod 755 /app/entrypoint.sh /app/aistudio2api
 ENV AISTUDIO_AUTH_STATES=/data/auth
 ENTRYPOINT ["/app/entrypoint.sh"]

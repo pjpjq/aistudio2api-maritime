@@ -3,10 +3,7 @@ set -eu
 mkdir -p "${AISTUDIO_AUTH_STATES:-/data/auth}"
 export AISTUDIO_AUTH_STATES="${AISTUDIO_AUTH_STATES:-/data/auth}"
 export LISTEN_ADDR="127.0.0.1:18790"
-mkdir -p /data/aistudio2api/runtime
-if [ ! -e /data/aistudio2api/runtime/camoufox ]; then
-    ln -s /app/runtime/camoufox /data/aistudio2api/runtime/camoufox
-fi
+mkdir -p /data/aistudio2api/runtime/camoufox
 cd /data/aistudio2api
 /app/aistudio2api --open-ui=false &
 child=$!
