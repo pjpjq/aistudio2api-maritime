@@ -17,11 +17,8 @@ BASELINE = Path('.deployment-baseline.json')
 STARTED = Path('.deployment-started')
 TERMINAL = {'success', 'failed', 'error', 'cancelled', 'canceled'}
 
-PROBE = r'''import hashlib, json, urllib.error, urllib.request
+PROBE = r'''import hashlib, http.cookiejar, json, urllib.error, urllib.request
 from pathlib import Path
-status = json.load(urllib.request.urlopen('http://127.0.0.1:18790/api/status', timeout=10))
-if status.get('version') != EXPECTED or not status.get('ready'):
-    raise RuntimeError('runtime version/readiness mismatch')
 env = None
 for directory in Path('/proc').iterdir():
     if directory.name.isdigit():
@@ -33,6 +30,21 @@ for directory in Path('/proc').iterdir():
             continue
 if not env or not env.get('PROXY_API_KEY'):
     raise RuntimeError('runtime API key unavailable')
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+admin_enabled = env.get('ADMIN_AUTH_ENABLED', 'false').lower() == 'true'
+if admin_enabled:
+    login = urllib.request.Request('http://127.0.0.1:18790/api/auth/login', data=json.dumps({'username': env['ADMIN_USERNAME'], 'password': env['ADMIN_PASSWORD']}).encode(), headers={'Content-Type': 'application/json'})
+    with opener.open(login, timeout=10):
+        pass
+try:
+    with opener.open('http://127.0.0.1:18790/api/status', timeout=10) as response:
+        status = json.load(response)
+finally:
+    if admin_enabled:
+        with opener.open(urllib.request.Request('http://127.0.0.1:18790/api/auth/logout', data=b'{}'), timeout=10):
+            pass
+if status.get('version') != EXPECTED or not status.get('ready'):
+    raise RuntimeError('runtime version/readiness mismatch')
 settings = {name: env.get(name) for name in ('WARM_WORKER_LIMIT', 'MAX_ACTIVE_WORKERS', 'WARM_STARTUP_CONCURRENCY', 'PER_ACCOUNT_CONCURRENCY', 'REQUEST_TIMEOUT', 'INIT_TIMEOUT', 'AISTUDIO_AUTH_STATES')}
 settings['proxy_key_sha256'] = hashlib.sha256(env['PROXY_API_KEY'].encode()).hexdigest()
 probes = []
