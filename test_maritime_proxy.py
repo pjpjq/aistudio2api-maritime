@@ -1,9 +1,12 @@
 import io
+import json
+import os
 import unittest
 from email.message import Message
 from unittest.mock import Mock, patch
 
 from maritime_proxy import Handler, UPSTREAM
+from aistudio_admin import admin_urlopen
 
 
 class ProxyTests(unittest.TestCase):
@@ -103,6 +106,48 @@ class ProxyTests(unittest.TestCase):
                 getattr(handler, "do_" + method)()
                 handler.send_response.assert_called_once_with(200)
         connection.assert_not_called()
+
+
+class KeepaliveLoginTests(unittest.TestCase):
+    credentials = {
+        "AISTUDIO_ADMIN_ORIGIN": "https://console.example.test",
+        "AISTUDIO_ADMIN_USERNAME": "dummy-admin",
+        "AISTUDIO_ADMIN_PASSWORD": "dummy-password",
+    }
+
+    @patch.dict(os.environ, credentials, clear=True)
+    @patch("aistudio_admin.urllib.request.build_opener")
+    @patch("aistudio_admin.urllib.request.urlopen")
+    def test_other_origins_never_receive_credentials(self, urlopen, build_opener):
+        for url in ["https://other.example.test/api/status", "http://console.example.test/api/status"]:
+            request = __import__("urllib.request", fromlist=["Request"]).Request(url)
+            with admin_urlopen(request, timeout=3):
+                pass
+            self.assertIs(urlopen.call_args.args[0], request)
+        build_opener.assert_not_called()
+
+    @patch.dict(os.environ, credentials, clear=True)
+    @patch("aistudio_admin.urllib.request.build_opener")
+    def test_matching_origin_logs_in_and_logs_out(self, build_opener):
+        request = __import__("urllib.request", fromlist=["Request"]).Request("https://console.example.test/api/status")
+        with admin_urlopen(request, timeout=3):
+            pass
+        calls = build_opener.return_value.open.call_args_list
+        self.assertEqual(len(calls), 3)
+        login = calls[0].args[0]
+        self.assertEqual(login.full_url, "https://console.example.test/api/auth/login")
+        self.assertEqual(json.loads(login.data), {"username": "dummy-admin", "password": "dummy-password"})
+        self.assertIs(calls[1].args[0], request)
+        self.assertEqual(calls[2].args[0].full_url, "https://console.example.test/api/auth/logout")
+
+    @patch.dict(os.environ, credentials, clear=True)
+    @patch("aistudio_admin.urllib.request.build_opener")
+    def test_failed_probe_still_logs_out(self, build_opener):
+        request = __import__("urllib.request", fromlist=["Request"]).Request("https://console.example.test/api/status")
+        with self.assertRaises(ValueError):
+            with admin_urlopen(request, timeout=3):
+                raise ValueError("dummy probe failure")
+        self.assertEqual(build_opener.return_value.open.call_args.args[0].full_url, "https://console.example.test/api/auth/logout")
 
 
 if __name__ == "__main__":

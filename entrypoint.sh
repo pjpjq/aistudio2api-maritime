@@ -3,12 +3,12 @@ set -eu
 mkdir -p "${AISTUDIO_AUTH_STATES:-/data/auth}"
 export AISTUDIO_AUTH_STATES="${AISTUDIO_AUTH_STATES:-/data/auth}"
 export LISTEN_ADDR="127.0.0.1:18790"
-mkdir -p /data/aistudio2api
-if [ ! -x /data/aistudio2api/aistudio2api ]; then
-    cp /app/aistudio2api /data/aistudio2api/aistudio2api
+mkdir -p /data/aistudio2api/runtime
+if [ ! -e /data/aistudio2api/runtime/camoufox ]; then
+    ln -s /app/runtime/camoufox /data/aistudio2api/runtime/camoufox
 fi
 cd /data/aistudio2api
-./aistudio2api --open-ui=false &
+/app/aistudio2api --open-ui=false &
 child=$!
 trap 'kill "$child" 2>/dev/null || true' TERM INT EXIT
 python3 - <<'PY' &

@@ -2,7 +2,7 @@ name: Maritime proxy regression
 
 on:
   push:
-    branches: [codex/aistudio-admin-put-fix]
+    branches: [codex/aistudio-admin-put-*]
   workflow_dispatch:
 
 permissions:
@@ -44,7 +44,7 @@ jobs:
           mount --bind /etc/ld.so.cache "$root/etc/ld.so.cache"
           mount -t tmpfs -o size=16m,nodev,nosuid tmpfs "$root/work"
           chmod 777 "$root/work"
-          mount --bind "$root" "$root"
+          mount --rbind "$root" "$root"
           mount -o remount,bind,ro "$root"
           chroot "$root" /usr/bin/env -i HOME=/work TMPDIR=/work LANG=C.UTF-8 PATH=/usr/bin:/bin \
             /usr/bin/setpriv --reuid=65534 --regid=65534 --clear-groups --bounding-set=-all --no-new-privs \
