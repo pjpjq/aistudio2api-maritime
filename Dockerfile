@@ -6,8 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libxrandr2 libxss1 \
     libxt6 libxtst6 libegl1 libegl-mesa0 libgl1-mesa-dri xvfb python3 curl unzip && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-ARG AISTUDIO_VERSION=v0.3.2
-ARG AISTUDIO_SHA256=7a5984be026695e48e9ead04275eb4d6b2e9d8b39e78182a07b998ad5c93454a
+ARG AISTUDIO_VERSION=v0.3.4
+ARG AISTUDIO_SHA256=56def0c91f1f6345bf37b18389842b3b8ec24a1af30d28425268cf30f3ff2ced
 ARG CAMOUFOX_URL=https://github.com/daijro/camoufox/releases/download/v152.0.4-beta.29/camoufox-152.0.4-beta.29-lin.x86_64.zip
 RUN curl -L --fail --retry 3 --retry-delay 2 \
       -o /tmp/aistudio2api.tar.gz \
