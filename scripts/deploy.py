@@ -178,12 +178,14 @@ def wait_deployment(deployment_id=None):
     raise RuntimeError('Maritime deployment timed out; inspect history before retry')
 
 
-def deploy(version, previous_version, rollback=False):
+def deploy(version, previous_version, rollback=False, *, skip_baseline_inference=False):
     wait_deployment()
     if rollback:
         before = json.loads(BASELINE.read_text())
     else:
-        before = probe(previous_version)
+        if skip_baseline_inference:
+            print('Manual release: old-version inference skipped; version, readiness and settings still checked', flush=True)
+        before = probe(previous_version, inference=not skip_baseline_inference)
         BASELINE.write_text(json.dumps(before))
     # Mark before POST: a lost response may still have started a deployment.
     STARTED.touch()
@@ -212,10 +214,11 @@ def main():
     parser.add_argument('--version', required=True)
     parser.add_argument('--previous-version', required=True)
     parser.add_argument('--rollback', action='store_true')
+    parser.add_argument('--skip-baseline-inference', action='store_true')
     args = parser.parse_args()
     if not all(re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', value) for value in (args.version, args.previous_version)):
         parser.error('invalid version')
-    deploy(args.version, args.previous_version, args.rollback)
+    deploy(args.version, args.previous_version, args.rollback, skip_baseline_inference=args.skip_baseline_inference)
 
 
 if __name__ == '__main__':
