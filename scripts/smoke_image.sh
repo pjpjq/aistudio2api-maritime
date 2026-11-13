@@ -4,7 +4,10 @@ scratch="$(mktemp -d -t maritime-smoke.XXXXXXXX)"
 container=""
 cleanup() {
   if [[ -n "$container" ]]; then docker stop -t 1 "$container" >/dev/null 2>&1 || true; fi
-  python3 -c 'import shutil, sys; from pathlib import Path; p = Path(sys.argv[1]); assert p.is_absolute() and p.name.startswith("maritime-smoke."); shutil.rmtree(p)' "$scratch"
+  local -a cleanup_python=(python3)
+  # The Linux runner's rootful Docker writes files owned by root to the test bind mount.
+  if [[ "${RUNNER_OS:-}" == Linux && "${GITHUB_ACTIONS:-}" == true ]]; then cleanup_python=(sudo -n python3); fi
+  "${cleanup_python[@]}" -c 'import shutil, sys; from pathlib import Path; p = Path(sys.argv[1]); assert p.is_absolute() and p.name.startswith("maritime-smoke."); shutil.rmtree(p)' "$scratch"
 }
 trap cleanup EXIT
 runtime="$scratch/data/aistudio2api/runtime"
@@ -83,9 +86,13 @@ if [[ -n "$old_url" && "$old_url" != "$browser_url" ]]; then
     --entrypoint python3 maritime-candidate /app/prepare_camoufox.py
   old_version="${old_url%/*}"
   old_version="${old_version##*/v}"
-  rmdir "$runtime/camoufox"
-  mv "$runtime/camoufox-$old_version-$old_sha" "$runtime/camoufox"
-  old_fingerprint="$(sha256sum "$runtime/camoufox/"{application.ini,camoufox-bin,libxul.so})"
+  old_cache="camoufox-$old_version-$old_sha"
+  if [[ ! -f "$scratch/old/scripts/prepare_camoufox.py" ]]; then
+    rmdir "$runtime/camoufox"
+    mv "$runtime/$old_cache" "$runtime/camoufox"
+    old_cache=camoufox
+  fi
+  old_fingerprint="$(sha256sum "$runtime/$old_cache/"{application.ini,camoufox-bin,libxul.so})"
 fi
 
 # Download and install through the same helper used in the image, before offline startup.
@@ -98,9 +105,10 @@ browser="$(docker run --rm --platform linux/amd64 --network none \
 smoke maritime-candidate "$(pin AISTUDIO_VERSION .)" "$browser"
 
 if [[ -n "$old_url" && "$old_url" != "$browser_url" ]]; then
-  [[ "$browser" != /data/aistudio2api/runtime/camoufox/camoufox-bin ]]
+  old_browser="/data/aistudio2api/runtime/$old_cache/camoufox-bin"
+  [[ "$browser" != "$old_browser" ]]
   build maritime-rollback "$scratch/old"
-  smoke maritime-rollback "$(pin AISTUDIO_VERSION "$scratch/old")" /data/aistudio2api/runtime/camoufox/camoufox-bin
-  [[ "$(sha256sum "$runtime/camoufox/"{application.ini,camoufox-bin,libxul.so})" == "$old_fingerprint" ]]
+  smoke maritime-rollback "$(pin AISTUDIO_VERSION "$scratch/old")" "$old_browser"
+  [[ "$(sha256sum "$runtime/$old_cache/"{application.ini,camoufox-bin,libxul.so})" == "$old_fingerprint" ]]
   echo 'Rollback browser cache unchanged'
 fi
