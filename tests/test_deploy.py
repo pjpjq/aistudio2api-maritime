@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from scripts import deploy
 
@@ -19,13 +19,35 @@ class DeploymentTests(unittest.TestCase):
         self.after = dict(self.before, version='v0.2.14')
 
     def test_remote_probe_is_valid_python(self):
-        compile('EXPECTED="v0.2.13"\nINFERENCE=False\nPUBLIC="https://api.maritime.sh/a/test"\n' + deploy.PROBE, '<remote>', 'exec')
+        compile('EXPECTED="v0.2.13"\nMODEL=None\nPUBLIC="https://api.maritime.sh/a/test"\n' + deploy.PROBE, '<remote>', 'exec')
 
     @patch.object(deploy, 'request')
     def test_failed_exec_does_not_log_secrets(self, request):
-        request.return_value = {'exitCode': 1, 'stderr': 'secret-runtime-key'}
-        with self.assertRaisesRegex(RuntimeError, '^Maritime runtime/schema probe failed$'):
+        request.return_value = {'exitCode': 1, 'stderr': 'secret-runtime-key', 'stdout': '{"failure":"secret"}'}
+        with self.assertRaisesRegex(RuntimeError, '^runtime: exec$'):
             deploy.probe('v0.2.13')
+
+    @patch.object(deploy.time, 'sleep')
+    @patch.object(deploy, 'remote_probe')
+    def test_short_quota_and_service_errors_retry_within_bound(self, check, sleep):
+        flash, argon = deploy.MODELS
+        flash_ok = {'model': flash, 'status': 'completed', 'marker': True}
+        argon_ok = dict(flash_ok, model=argon)
+        check.side_effect = [self.before, deploy.ProbeFailure(flash, {'failure': 'http', 'http': 429, 'retry_after': 8}),
+                             deploy.ProbeFailure(flash, {'failure': 'http', 'http': 503}), flash_ok, argon_ok]
+        self.assertEqual(deploy.probe('v0.2.13')['probes'], [flash_ok, argon_ok])
+        self.assertEqual(sleep.call_args_list, [call(8), call(15)])
+
+    @patch.object(deploy.time, 'sleep')
+    @patch.object(deploy, 'remote_probe')
+    def test_long_quota_and_marker_failure_still_reject_both_models(self, check, sleep):
+        flash, argon = deploy.MODELS
+        check.side_effect = [self.before, deploy.ProbeFailure(flash, {'failure': 'http', 'http': 429, 'retry_after': 66000}),
+                             deploy.ProbeFailure(argon, {'failure': 'marker'})]
+        with self.assertRaisesRegex(RuntimeError, 'gemini-3.8-flash: http.*429.*gemini-4-argon: marker'):
+            deploy.probe('v0.2.13')
+        sleep.assert_not_called()
+        self.assertEqual(check.call_args_list, [call('v0.2.13'), call('v0.2.13', flash), call('v0.2.13', argon)])
 
     @patch.object(deploy, 'history')
     def test_wait_rejects_failure(self, history):
