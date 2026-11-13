@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2 libdbus-1-3 libdbus-glib-1-2 libdrm2 libgbm1 libgtk-3-0 \
     libnspr4 libnss3 libpango-1.0-0 libx11-6 libx11-xcb1 libxcb1 \
     libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libxrandr2 libxss1 \
-    libxt6 libxtst6 libegl1 libegl-mesa0 libgl1-mesa-dri xvfb python3 curl unzip && rm -rf /var/lib/apt/lists/*
+    libxt6 libxtst6 libegl1 libegl-mesa0 libgl1-mesa-dri xvfb python3 curl libarchive-tools && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ARG AISTUDIO_VERSION=v0.3.6
 ARG AISTUDIO_SHA256=56f6a48c796521a6965db907a96340685056ba97290f35b50b892e86b28ee850
