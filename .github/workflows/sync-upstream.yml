@@ -2,7 +2,7 @@ name: Sync AIStudio2API upstream
 
 on:
   push:
-    branches: [main, "codex/**"]
+    branches: [main]
   pull_request:
   schedule:
     - cron: "17 * * * *"
@@ -26,10 +26,21 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
       - run: python3 -m unittest discover -s tests -v
       - name: Build and smoke-test main deployment contract
-        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        if: github.event_name == 'push'
         run: bash scripts/smoke_image.sh
+      - name: Build upstream candidate and verify offline cache rollback
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python3 scripts/upstream.py check
+          bash scripts/smoke_image.sh --rollback "$BASE_SHA"
 
   update:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
@@ -72,7 +83,7 @@ jobs:
         run: test -n "$MARITIME_TOKEN"
       - name: Build and smoke-test the candidate
         if: steps.check.outputs.changed == 'true' || inputs.redeploy
-        run: bash scripts/smoke_image.sh
+        run: bash scripts/smoke_image.sh --rollback
       - name: Persist the validated version in main
         if: steps.check.outputs.changed == 'true' || inputs.redeploy
         id: commit

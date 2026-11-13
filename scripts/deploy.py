@@ -127,7 +127,8 @@ def deploy(version, previous_version, rollback=False):
     deployment_id = result['id']
     print(json.dumps({'deployment_id': deployment_id, 'expected_version': version}), flush=True)
     wait_deployment(deployment_id)
-    deadline = time.monotonic() + 240
+    # A browser-version change may need to fill a new persistent cache before readiness.
+    deadline = time.monotonic() + 600
     while True:
         try:
             probe(version, inference=False)

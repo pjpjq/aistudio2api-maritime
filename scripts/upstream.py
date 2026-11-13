@@ -12,6 +12,8 @@ from pathlib import Path
 
 
 OFFICIAL = 'Mag1cFall/AIStudio2API'
+BROWSER_REPO = 'daijro/camoufox'
+BROWSER_VERSION = r'[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z]+\.[0-9]+)?'
 VERSION = r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
 
 
@@ -48,18 +50,32 @@ def emit(values):
     print(json.dumps(values))
 
 
+def asset(release, repo, tag, filename):
+    assets = release.get('assets')
+    if not isinstance(assets, list):
+        raise RuntimeError('invalid release assets')
+    matches = [item for item in assets if isinstance(item, dict) and item.get('name') == filename]
+    url = f'https://github.com/{repo}/releases/download/{tag}/{filename}'
+    if len(matches) != 1 or matches[0].get('browser_download_url') != url:
+        raise RuntimeError('missing or untrusted Linux amd64 release asset')
+    digest = matches[0].get('digest')
+    if not isinstance(digest, str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', digest):
+        raise RuntimeError('missing or invalid official asset SHA-256 digest')
+    return url, digest.removeprefix('sha256:')
+
+
 def check():
     dockerfile = Path('Dockerfile')
     source = dockerfile.read_text()
     pins = {}
-    for name in ('VERSION', 'SHA256'):
-        lines = re.findall(rf'(?m)^ARG AISTUDIO_{name}=(.*)$', source)
+    for name in ('AISTUDIO_VERSION', 'AISTUDIO_SHA256', 'CAMOUFOX_URL', 'CAMOUFOX_SHA256'):
+        lines = re.findall(rf'(?m)^ARG {name}=(.*)$', source)
         if len(lines) != 1:
             raise RuntimeError('Dockerfile must have exactly one version/checksum pin')
         pins[name] = lines[0]
-    previous = pins['VERSION']
+    previous = pins['AISTUDIO_VERSION']
     version_tuple(previous)
-    if not re.fullmatch(r'[0-9a-f]{64}', pins['SHA256']):
+    if not all(re.fullmatch(r'[0-9a-f]{64}', pins[name]) for name in ('AISTUDIO_SHA256', 'CAMOUFOX_SHA256')):
         raise RuntimeError('invalid current SHA-256 pin')
     release = json.loads(fetch(f'https://api.github.com/repos/{OFFICIAL}/releases/latest'))
     if not isinstance(release, dict) or release.get('draft') is not False or release.get('prerelease') is not False:
@@ -67,29 +83,25 @@ def check():
     version = release.get('tag_name')
     if version_tuple(version) < version_tuple(previous):
         raise RuntimeError('refusing upstream version downgrade')
-    filename = f'aistudio2api-{version}-linux-amd64.tar.gz'
-    assets = release.get('assets', [])
-    if not isinstance(assets, list):
-        raise RuntimeError('invalid release assets')
-    assets = [asset for asset in assets if isinstance(asset, dict) and asset.get('name') == filename]
-    expected_url = f'https://github.com/{OFFICIAL}/releases/download/{version}/{filename}'
-    if len(assets) != 1 or assets[0].get('browser_download_url') != expected_url:
-        raise RuntimeError('missing or untrusted Linux amd64 release asset')
-    digest = assets[0].get('digest')
-    if not isinstance(digest, str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', digest):
-        raise RuntimeError('missing or invalid official asset SHA-256 digest')
-    checksum = digest.removeprefix('sha256:')
+    _, checksum = asset(release, OFFICIAL, version, f'aistudio2api-{version}-linux-amd64.tar.gz')
     changed = version != previous
-    if not changed and checksum != pins['SHA256']:
+    if not changed and checksum != pins['AISTUDIO_SHA256']:
         raise RuntimeError('same-version asset changed; manual review required')
     if changed:
-        browser = re.findall(r'https://github\.com/daijro/camoufox/releases/download/v([^/]+)/camoufox-', source)
         upstream_source = fetch(f'https://raw.githubusercontent.com/{OFFICIAL}/{version}/internal/camoufoxnative/download.go')
-        required_browser = re.findall(r'(?m)^const camoufoxRelease = "([^"]+)"', upstream_source)
-        if len(browser) != 1 or required_browser != browser:
-            raise RuntimeError('Camoufox compatibility changed; update image manually')
-        source = source.replace(f'ARG AISTUDIO_VERSION={previous}\n', f'ARG AISTUDIO_VERSION={version}\n')
-        source = source.replace(f'ARG AISTUDIO_SHA256={pins["SHA256"]}\n', f'ARG AISTUDIO_SHA256={checksum}\n')
+        required = re.findall(r'(?m)^const camoufoxRelease = "([^"]+)"$', upstream_source)
+        if len(required) != 1 or not re.fullmatch(BROWSER_VERSION, required[0]):
+            raise RuntimeError('unrecognized Camoufox requirement; manual review required')
+        browser = required[0]
+        tag = f'v{browser}'
+        browser_release = json.loads(fetch(f'https://api.github.com/repos/{BROWSER_REPO}/releases/tags/{tag}'))
+        if not isinstance(browser_release, dict) or browser_release.get('tag_name') != tag or browser_release.get('draft') is not False:
+            raise RuntimeError('Camoufox release does not match the required tag')
+        url, browser_checksum = asset(browser_release, BROWSER_REPO, tag, f'camoufox-{browser}-lin.x86_64.zip')
+        if url == pins['CAMOUFOX_URL'] and browser_checksum != pins['CAMOUFOX_SHA256']:
+            raise RuntimeError('same-version Camoufox asset changed; manual review required')
+        for name, value in zip(pins, (version, checksum, url, browser_checksum)):
+            source = source.replace(f'ARG {name}={pins[name]}\n', f'ARG {name}={value}\n')
         dockerfile.write_text(source)
     emit({'changed': changed, 'version': version, 'previous_version': previous})
 
