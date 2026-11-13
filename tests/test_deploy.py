@@ -74,6 +74,17 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(json.loads(deploy.BASELINE.read_text()), self.before)
         self.assertTrue(deploy.STARTED.exists())
         self.assertEqual(request.call_args.args[2]['branch'], 'main')
+        self.assertEqual(probe.call_args_list[0], call('v0.2.13', inference=True))
+
+    @patch.object(deploy, 'wait_deployment')
+    @patch.object(deploy, 'request', return_value={'id': 'candidate'})
+    @patch.object(deploy, 'probe')
+    def test_manual_release_skips_only_old_inference(self, probe, request, wait):
+        probe.side_effect = [self.before, self.after, self.after]
+        deploy.deploy('v0.2.14', 'v0.2.13', skip_baseline_inference=True)
+        self.assertEqual(probe.call_args_list, [call('v0.2.13', inference=False),
+                                               call('v0.2.14', inference=False), call('v0.2.14')])
+        self.assertEqual(json.loads(deploy.BASELINE.read_text()), self.before)
 
     @patch.object(deploy, 'wait_deployment')
     @patch.object(deploy, 'request', side_effect=RuntimeError('network failure'))

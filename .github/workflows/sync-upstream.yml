@@ -12,6 +12,10 @@ on:
         description: Rebuild and verify main even when the version is unchanged
         type: boolean
         default: false
+      skip_baseline_inference:
+        description: Skip old-version model requests only; candidate checks and rollback stay enabled
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -109,7 +113,11 @@ jobs:
           MARITIME_TOKEN: ${{ secrets.MARITIME_TOKEN }}
           VERSION: ${{ steps.check.outputs.version }}
           PREVIOUS_VERSION: ${{ steps.check.outputs.previous_version }}
-        run: python3 scripts/deploy.py --version "$VERSION" --previous-version "$PREVIOUS_VERSION"
+          SKIP_BASELINE_INFERENCE: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_baseline_inference }}
+        run: |
+          args=()
+          if [[ "$SKIP_BASELINE_INFERENCE" == true ]]; then args+=(--skip-baseline-inference); fi
+          python3 scripts/deploy.py --version "$VERSION" --previous-version "$PREVIOUS_VERSION" "${args[@]}"
       - name: Restore main and deployment after candidate failure
         if: failure() && steps.deploy.outcome == 'failure'
         env:
