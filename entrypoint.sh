@@ -5,10 +5,20 @@ export AISTUDIO_AUTH_STATES="${AISTUDIO_AUTH_STATES:-/data/auth}"
 export LISTEN_ADDR="127.0.0.1:18790"
 mkdir -p /data/aistudio2api/runtime/camoufox
 cd /data/aistudio2api
+managed_browser=false
+if [ -z "${CAMOUFOX_PATH:-}" ]; then
+    CAMOUFOX_PATH=$(python3 /app/prepare_camoufox.py --path)
+    export CAMOUFOX_PATH
+    managed_browser=true
+fi
 /app/aistudio2api --open-ui=false &
 child=$!
 trap 'kill "$child" 2>/dev/null || true' TERM INT EXIT
-python3 - <<'PY' &
+(
+if [ "$managed_browser" = true ]; then
+    python3 /app/prepare_camoufox.py
+fi
+python3 - <<'PY'
 import http.cookiejar
 import json
 import os
@@ -35,4 +45,5 @@ for _ in range(60):
 else:
     raise SystemExit("AIStudio2API did not accept the startup request")
 PY
+) &
 exec python3 /app/maritime_proxy.py "$child"

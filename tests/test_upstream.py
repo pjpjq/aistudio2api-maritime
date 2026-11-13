@@ -11,11 +11,13 @@ from unittest.mock import Mock, patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/upstream.py'
+OLD_BROWSER = '152.0.4-beta.29'
+NEW_BROWSER = '158.0.1-beta.41'
+BROWSER_URL = 'https://github.com/daijro/camoufox/releases/download/v{0}/camoufox-{0}-lin.x86_64.zip'
 DOCKERFILE = '''FROM debian:bookworm-slim
 ARG AISTUDIO_VERSION=v0.2.13
 ARG AISTUDIO_SHA256=31c5b16e5a2e84e932dcbc13364f04e58b7bd0c6a699cc1465c5d7443d4e6e51
-RUN curl https://github.com/daijro/camoufox/releases/download/v152.0.4-beta.29/camoufox-152.0.4-beta.29-lin.x86_64.zip
-'''
+''' + f'ARG CAMOUFOX_URL={BROWSER_URL.format(OLD_BROWSER)}\nARG CAMOUFOX_SHA256={"c" * 64}\n'
 
 
 class Response(io.BytesIO):
@@ -34,7 +36,8 @@ class UpstreamTests(unittest.TestCase):
         self.docker.write_text(DOCKERFILE)
         self.output = self.root / 'output'
         self.calls = []
-        self.browser = '152.0.4-beta.29'
+        self.browser = OLD_BROWSER
+        self.browser_digest = 'sha256:' + 'c' * 64
         self.release = {
             'tag_name': 'v0.2.14', 'draft': False, 'prerelease': False,
             'assets': [{
@@ -52,6 +55,12 @@ class UpstreamTests(unittest.TestCase):
             return Response(json.dumps(self.release).encode())
         if url.startswith('https://raw.githubusercontent.com/Mag1cFall/AIStudio2API/'):
             return Response(('const camoufoxRelease = "' + self.browser + '"').encode())
+        if url == f'https://api.github.com/repos/daijro/camoufox/releases/tags/v{self.browser}':
+            return Response(json.dumps({
+                'tag_name': 'v' + self.browser, 'draft': False, 'prerelease': True,
+                'assets': [{'name': f'camoufox-{self.browser}-lin.x86_64.zip',
+                            'browser_download_url': BROWSER_URL.format(self.browser), 'digest': self.browser_digest}],
+            }).encode())
         raise AssertionError('Unexpected URL: ' + url)
 
     def command(self, *args):
@@ -124,6 +133,22 @@ class UpstreamTests(unittest.TestCase):
         with self.assertRaises((RuntimeError, ValueError)):
             self.command('check')
         self.assertEqual(self.docker.read_text(), DOCKERFILE)
+
+    def test_valid_browser_change_updates_url_and_digest(self):
+        self.browser = NEW_BROWSER
+        self.browser_digest = 'sha256:' + 'd' * 64
+        self.assertEqual(self.command('check')['changed'], 'true')
+        pins = self.docker.read_text()
+        self.assertIn('ARG AISTUDIO_VERSION=v0.2.14\n', pins)
+        self.assertIn(f'ARG CAMOUFOX_URL={BROWSER_URL.format(NEW_BROWSER)}\n', pins)
+        self.assertIn('ARG CAMOUFOX_SHA256=' + 'd' * 64 + '\n', pins)
+
+    def test_browser_digest_missing_or_changed_in_place_rejects_all_updates(self):
+        for digest in (None, 'sha256:' + 'd' * 64):
+            self.browser_digest = digest
+            with self.assertRaises(RuntimeError):
+                self.command('check')
+            self.assertEqual(self.docker.read_text(), DOCKERFILE)
 
     def test_same_version_changed_digest_is_rejected(self):
         self.release['tag_name'] = 'v0.2.13'
