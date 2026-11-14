@@ -6,8 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libxrandr2 libxss1 \
     libxt6 libxtst6 libegl1 libegl-mesa0 libgl1-mesa-dri xvfb python3 curl libarchive-tools && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-ARG AISTUDIO_VERSION=v0.3.7
-ARG AISTUDIO_SHA256=60ce36b8c590e7cf8361b34c622e03bcfd03663981a84740ab0deefd01721eb5
+ARG AISTUDIO_VERSION=v0.3.8
+ARG AISTUDIO_SHA256=fb7f854e1fc24b7c93b1bdc7f421f432eda41247bdef1499fc477161e1dac811
 ARG CAMOUFOX_URL=https://github.com/daijro/camoufox/releases/download/v158.0.1-beta.41/camoufox-158.0.1-beta.41-lin.x86_64.zip
 ARG CAMOUFOX_SHA256=3f2eb1d0451fa58e45e43e55f5e6181565069791ae60c0574f0ceb1f01341c33
 RUN curl -L --fail --retry 3 --retry-delay 2 \
