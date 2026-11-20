@@ -37,6 +37,7 @@ class UpstreamTests(unittest.TestCase):
         self.output = self.root / 'output'
         self.calls = []
         self.browser = OLD_BROWSER
+        self.browser_repo = 'daijro/camoufox'
         self.browser_digest = 'sha256:' + 'c' * 64
         self.release = {
             'tag_name': 'v0.2.14', 'draft': False, 'prerelease': False,
@@ -54,12 +55,16 @@ class UpstreamTests(unittest.TestCase):
         if url == 'https://api.github.com/repos/Mag1cFall/AIStudio2API/releases/latest':
             return Response(json.dumps(self.release).encode())
         if url.startswith('https://raw.githubusercontent.com/Mag1cFall/AIStudio2API/'):
-            return Response(('const camoufoxRelease = "' + self.browser + '"').encode())
-        if url == f'https://api.github.com/repos/daijro/camoufox/releases/tags/v{self.browser}':
+            return Response((
+                f'const camoufoxRelease = "{self.browser}"\n'
+                f'address := fmt.Sprintf("https://github.com/{self.browser_repo}/releases/download/v%s/%s", camoufoxRelease, asset)'
+            ).encode())
+        if url == f'https://api.github.com/repos/{self.browser_repo}/releases/tags/v{self.browser}':
             return Response(json.dumps({
                 'tag_name': 'v' + self.browser, 'draft': False, 'prerelease': True,
                 'assets': [{'name': f'camoufox-{self.browser}-lin.x86_64.zip',
-                            'browser_download_url': BROWSER_URL.format(self.browser), 'digest': self.browser_digest}],
+                            'browser_download_url': BROWSER_URL.format(self.browser).replace('daijro/camoufox', self.browser_repo),
+                            'digest': self.browser_digest}],
             }).encode())
         raise AssertionError('Unexpected URL: ' + url)
 
@@ -142,6 +147,22 @@ class UpstreamTests(unittest.TestCase):
         self.assertIn('ARG AISTUDIO_VERSION=v0.2.14\n', pins)
         self.assertIn(f'ARG CAMOUFOX_URL={BROWSER_URL.format(NEW_BROWSER)}\n', pins)
         self.assertIn('ARG CAMOUFOX_SHA256=' + 'd' * 64 + '\n', pins)
+
+    def test_upstream_browser_fork_updates_url_and_digest(self):
+        self.browser = '158.0.1-clock.2'
+        self.browser_repo = 'Mag1cFall/camoufox'
+        self.browser_digest = 'sha256:' + 'd' * 64
+        self.assertEqual(self.command('check')['changed'], 'true')
+        url = BROWSER_URL.format(self.browser).replace('daijro/camoufox', self.browser_repo)
+        self.assertIn(f'ARG CAMOUFOX_URL={url}\n', self.docker.read_text())
+        self.assertIn('ARG CAMOUFOX_SHA256=' + 'd' * 64 + '\n', self.docker.read_text())
+
+    def test_untrusted_browser_repository_is_rejected_before_fetch(self):
+        self.browser_repo = 'untrusted/camoufox'
+        with self.assertRaises(RuntimeError):
+            self.command('check')
+        self.assertEqual(self.docker.read_text(), DOCKERFILE)
+        self.assertEqual(len(self.calls), 2)
 
     def test_browser_digest_missing_or_changed_in_place_rejects_all_updates(self):
         for digest in (None, 'sha256:' + 'd' * 64):

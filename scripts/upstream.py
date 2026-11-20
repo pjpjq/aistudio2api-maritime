@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 OFFICIAL = 'Mag1cFall/AIStudio2API'
-BROWSER_REPO = 'daijro/camoufox'
+BROWSER_REPOS = {'daijro/camoufox', 'Mag1cFall/camoufox'}
 BROWSER_VERSION = r'[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z]+\.[0-9]+)?'
 VERSION = r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
 
@@ -33,7 +33,7 @@ def fetch(url):
         with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as response:
             raw = response.read(2 * 1024 * 1024 + 1)
     except urllib.error.HTTPError as error:
-        raise RuntimeError(f'upstream metadata HTTP {error.code}') from None
+        raise RuntimeError(f'upstream metadata HTTP {error.code}: {url}') from None
     except (urllib.error.URLError, TimeoutError):
         raise RuntimeError('upstream metadata network failure') from None
     if len(raw) > 2 * 1024 * 1024:
@@ -90,14 +90,17 @@ def check():
     if changed:
         upstream_source = fetch(f'https://raw.githubusercontent.com/{OFFICIAL}/{version}/internal/camoufoxnative/download.go')
         required = re.findall(r'(?m)^const camoufoxRelease = "([^"]+)"$', upstream_source)
-        if len(required) != 1 or not re.fullmatch(BROWSER_VERSION, required[0]):
+        repos = re.findall(r'"https://github\.com/([^"]+)/releases/download/v%s/%s"', upstream_source)
+        if (len(required) != 1 or not re.fullmatch(BROWSER_VERSION, required[0])
+                or len(repos) != 1 or repos[0] not in BROWSER_REPOS):
             raise RuntimeError('unrecognized Camoufox requirement; manual review required')
         browser = required[0]
+        repo = repos[0]
         tag = f'v{browser}'
-        browser_release = json.loads(fetch(f'https://api.github.com/repos/{BROWSER_REPO}/releases/tags/{tag}'))
+        browser_release = json.loads(fetch(f'https://api.github.com/repos/{repo}/releases/tags/{tag}'))
         if not isinstance(browser_release, dict) or browser_release.get('tag_name') != tag or browser_release.get('draft') is not False:
             raise RuntimeError('Camoufox release does not match the required tag')
-        url, browser_checksum = asset(browser_release, BROWSER_REPO, tag, f'camoufox-{browser}-lin.x86_64.zip')
+        url, browser_checksum = asset(browser_release, repo, tag, f'camoufox-{browser}-lin.x86_64.zip')
         if url == pins['CAMOUFOX_URL'] and browser_checksum != pins['CAMOUFOX_SHA256']:
             raise RuntimeError('same-version Camoufox asset changed; manual review required')
         for name, value in zip(pins, (version, checksum, url, browser_checksum)):

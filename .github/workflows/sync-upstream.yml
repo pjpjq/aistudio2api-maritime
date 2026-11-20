@@ -144,3 +144,48 @@ jobs:
         with:
           path: .upstream-check-state
           key: maritime-check-${{ github.run_id }}-${{ github.run_attempt }}
+
+  notify-failure:
+    needs: [test, update]
+    if: >-
+      always() && !cancelled() && github.ref == 'refs/heads/main' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      (needs.test.result == 'failure' || needs.update.result == 'failure')
+    permissions: {}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Notify update failure on Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TEST_RESULT: ${{ needs.test.result }}
+          UPDATE_RESULT: ${{ needs.update.result }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from http.client import HTTPException
+          from urllib.request import Request, urlopen
+
+          token = os.environ.get("TELEGRAM_BOT_TOKEN")
+          chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+          if not token or not chat_id:
+              raise SystemExit("Telegram alert credentials are missing.")
+          failed = ", ".join(job for job in ("test", "update") if os.environ[f"{job.upper()}_RESULT"] == "failure")
+          run_url = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          payload = {
+              "chat_id": chat_id,
+              "text": f"❌ AIStudio2API 上游同步失败\n失败任务：{failed}\nActions：{run_url}",
+              "link_preview_options": {"is_disabled": True},
+          }
+          try:
+              request = Request(f"https://api.telegram.org/bot{token}/sendMessage",
+                                data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
+              with urlopen(request, timeout=12) as response:
+                  result = json.load(response)
+          except (HTTPException, OSError, ValueError):
+              raise SystemExit("Telegram alert request failed.") from None
+          if not isinstance(result, dict) or result.get("ok") is not True:
+              raise SystemExit("Telegram did not accept the alert.")
+          PY
