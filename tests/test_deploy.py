@@ -96,6 +96,27 @@ class DeploymentTests(unittest.TestCase):
 
     @patch.object(deploy.time, 'sleep')
     @patch.object(deploy, 'remote_probe')
+    def test_initial_invalid_response_retries_once_but_never_passes_as_a_marker(self, check, sleep):
+        flash, argon = deploy.MODELS
+        flash_ok = {'model': flash, 'status': 'completed', 'marker': True}
+        argon_ok = dict(flash_ok, model=argon)
+        invalid = deploy.ProbeFailure(flash, {'failure': 'invalid_response'})
+        for again in (flash_ok, invalid):
+            with self.subTest(second=again):
+                sleep.reset_mock()
+                check.reset_mock()
+                check.side_effect = [dict(self.before, probes=[]), invalid, again, argon_ok]
+                if again is invalid:
+                    with self.assertRaisesRegex(RuntimeError, 'gemini-3.8-flash: invalid_response'):
+                        deploy.probe('v0.2.13')
+                else:
+                    self.assertEqual(deploy.probe('v0.2.13')['probes'], [flash_ok, argon_ok])
+                sleep.assert_called_once_with(5)
+                self.assertEqual(check.call_args_list,
+                                 [call('v0.2.13'), call('v0.2.13', flash), call('v0.2.13', flash), call('v0.2.13', argon)])
+
+    @patch.object(deploy.time, 'sleep')
+    @patch.object(deploy, 'remote_probe')
     def test_long_quota_and_marker_failure_still_reject_both_models(self, check, sleep):
         flash, argon = deploy.MODELS
         check.side_effect = [self.before, deploy.ProbeFailure(flash, {'failure': 'http', 'http': 429, 'retry_after': 66000}),

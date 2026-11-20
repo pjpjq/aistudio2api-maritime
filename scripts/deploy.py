@@ -149,7 +149,7 @@ def check_browser_capacity(browser, size_kib):
 class ProbeFailure(RuntimeError):
     def __init__(self, model, payload):
         stage = payload.get('failure')
-        stage = stage if isinstance(stage, str) and stage in PROBE_ERRORS else 'exec'
+        self.stage = stage if isinstance(stage, str) and stage in PROBE_ERRORS else 'exec'
         code = payload.get('http')
         self.http = code if type(code) is int and 400 <= code <= 599 else None
         hint = payload.get('retry_after')
@@ -157,7 +157,7 @@ class ProbeFailure(RuntimeError):
         details = f'HTTP {self.http}' if self.http else ''
         if self.retry_after is not None:
             details += f' retry_after={self.retry_after}s'
-        super().__init__(f'{model or "runtime"}: {stage}' + (f' ({details.strip()})' if details else ''))
+        super().__init__(f'{model or "runtime"}: {self.stage}' + (f' ({details.strip()})' if details else ''))
 
 
 def remote_probe(version, model=None):
@@ -191,6 +191,9 @@ def probe(version, inference=True):
                 break
             except ProbeFailure as error:
                 print(f'Probe attempt {attempt}: {error}', flush=True)
+                if attempt == 1 and error.stage == 'invalid_response':
+                    time.sleep(delay)
+                    continue
                 if not delay or error.http not in (429, 503) or (error.retry_after or 0) > 30:
                     failures.append(str(error))
                     break
