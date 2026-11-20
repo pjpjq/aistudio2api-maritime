@@ -111,4 +111,8 @@ if [[ -n "$old_url" && "$old_url" != "$browser_url" ]]; then
   smoke maritime-rollback "$(pin AISTUDIO_VERSION "$scratch/old")" "$old_browser"
   [[ "$(sha256sum "$runtime/$old_cache/"{application.ini,camoufox-bin,libxul.so})" == "$old_fingerprint" ]]
   echo 'Rollback browser cache unchanged'
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    browser_usage="$(du -sk "$scratch${browser%/*}")"
+    printf 'browser_path=%s\nbrowser_kib=%s\n' "$browser" "${browser_usage%%[[:space:]]*}" >> "$GITHUB_OUTPUT"
+  fi
 fi

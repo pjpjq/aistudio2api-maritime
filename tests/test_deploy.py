@@ -1,7 +1,10 @@
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import call, patch
 
 from scripts import deploy
@@ -20,6 +23,59 @@ class DeploymentTests(unittest.TestCase):
 
     def test_remote_probe_is_valid_python(self):
         compile('EXPECTED="v0.2.13"\nMODEL=None\nPUBLIC="https://api.maritime.sh/a/test"\n' + deploy.PROBE, '<remote>', 'exec')
+
+    @patch.object(deploy, 'request')
+    def test_capacity_checks_measured_size_plus_headroom(self, request):
+        browser = '/data/aistudio2api/runtime/camoufox-158.0.1-beta.41-' + 'a' * 64 + '/camoufox-bin'
+        required = 200000 + deploy.CAPACITY_HEADROOM_KIB
+        request.return_value = {'exitCode': 0, 'stdout': json.dumps({'available_kib': required - 1})}
+        with self.assertRaisesRegex(RuntimeError, 'Insufficient Maritime /data.*main not modified'):
+            deploy.check_browser_capacity(browser, '200000')
+        self.assertFalse(deploy.STARTED.exists())
+        request.assert_called_once_with('POST', f'/api/agents/{deploy.AGENT}/exec', {
+            'command': ['python3', '-c', deploy.CAPACITY, browser, '158.0.1-beta.41'],
+        })
+        for result in ({'available_kib': required}, {'cached': True}):
+            request.return_value = {'exitCode': 0, 'stdout': json.dumps(result)}
+            with redirect_stdout(io.StringIO()):
+                deploy.check_browser_capacity(browser, '200000')
+
+    @patch.object(deploy, 'request')
+    def test_capacity_rejects_invalid_inputs_and_exec_results(self, request):
+        browser = '/data/aistudio2api/runtime/camoufox-158.0.1-beta.41-' + 'a' * 64 + '/camoufox-bin'
+        for path, size in ((browser + '\nfoo=bar', '1'), (browser, '0'), (browser, '200 KiB')):
+            with self.subTest(path=path, size=size), self.assertRaisesRegex(ValueError, 'Invalid Camoufox'):
+                deploy.check_browser_capacity(path, size)
+        request.assert_not_called()
+        for result in ({'exitCode': 1, 'stdout': '{"cached":true}', 'stderr': 'sensitive'},
+                       {'stdout': '{"cached":true}'}, {'exitCode': 0, 'stdout': '{"available_kib":true}'}):
+            with self.subTest(result=result), self.assertRaisesRegex(RuntimeError, '^Unable to verify Camoufox capacity on Maritime /data$'):
+                request.return_value = result
+                deploy.check_browser_capacity(browser, '1')
+
+    def test_remote_capacity_recognizes_exact_executable_cache(self):
+        root = Path(self.temp.name)
+        browser = root / 'camoufox-158.0.1-beta.41-hash' / 'camoufox-bin'
+        for name, version, mode, cached in (('camoufox', '158.0.1-beta.41', 0o755, True),
+                                            (browser.parent.name, '158.0.1-beta.41', 0o644, False),
+                                            (browser.parent.name, '158.0.1-beta.40', 0o755, False),
+                                            (browser.parent.name, '158.0.1-beta.41', 0o755, True)):
+            with self.subTest(name=name, version=version, mode=mode), tempfile.TemporaryDirectory(dir=root) as tmp:
+                cache = Path(tmp) / name
+                cache.mkdir()
+                executable = cache / browser.name
+                executable.touch()
+                executable.chmod(mode)
+                (cache / 'application.ini').write_text(f'[App]\nVersion={version}\n')
+                fs = SimpleNamespace(f_bavail=3, f_frsize=4096)
+                with patch('sys.argv', ['-c', str(Path(tmp) / browser.parent.name / browser.name), '158.0.1-beta.41']), \
+                     patch.object(deploy.os, 'statvfs', return_value=fs) as statvfs, redirect_stdout(io.StringIO()) as output:
+                    exec(deploy.CAPACITY, {})
+                self.assertEqual(json.loads(output.getvalue()), {'cached': True} if cached else {'available_kib': 12})
+                if cached:
+                    statvfs.assert_not_called()
+                else:
+                    statvfs.assert_called_once_with('/data')
 
     @patch.object(deploy, 'request')
     def test_failed_exec_does_not_log_secrets(self, request):

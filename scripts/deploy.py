@@ -19,6 +19,7 @@ TERMINAL = {'success', 'failed', 'error', 'cancelled', 'canceled'}
 MODELS = ('gemini-3.8-flash', 'gemini-4-argon')
 PROBE_ERRORS = {'runtime_key', 'admin_login', 'admin_status', 'admin_logout', 'readiness',
                 'http', 'transport', 'invalid_response', 'marker'}
+CAPACITY_HEADROOM_KIB = 64 * 1024
 
 PROBE = r'''import hashlib, http.cookiejar, json, urllib.error, urllib.request
 from pathlib import Path
@@ -84,6 +85,23 @@ else:
     print(json.dumps({'model': MODEL, 'status': 'completed', 'marker': True}))
 '''
 
+CAPACITY = r'''import json, os, sys
+from pathlib import Path
+
+browser, version = sys.argv[1:]
+directory = Path(browser).parent
+for cache in (directory.with_name('camoufox'), directory):
+    executable = cache / 'camoufox-bin'
+    ini = cache / 'application.ini'
+    if (executable.is_file() and os.access(executable, os.X_OK) and ini.is_file()
+            and f'Version={version}' in ini.read_text().splitlines()):
+        print(json.dumps({'cached': True}))
+        break
+else:
+    volume = os.statvfs('/data')
+    print(json.dumps({'available_kib': volume.f_bavail * volume.f_frsize // 1024}))
+'''
+
 
 def request(method, path, body=None):
     token = os.environ.get('MARITIME_TOKEN', '').strip()
@@ -100,6 +118,32 @@ def request(method, path, body=None):
         raise RuntimeError(f'Maritime {method} {path}: HTTP {error.code}') from None
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
         raise RuntimeError(f'Maritime {method} {path}: network/JSON failure; inspect history before retrying POST') from None
+
+
+def check_browser_capacity(browser, size_kib):
+    path = re.fullmatch(r'/data/aistudio2api/runtime/camoufox-'
+                        r'([0-9]+\.[0-9]+\.[0-9]+(?:-[a-z]+\.[0-9]+)?)-[0-9a-f]{64}/camoufox-bin', browser)
+    if not path or not re.fullmatch(r'[1-9][0-9]{0,11}', size_kib):
+        raise ValueError('Invalid Camoufox smoke-test capacity outputs')
+    result = request('POST', f'/api/agents/{AGENT}/exec',
+                     {'command': ['python3', '-c', CAPACITY, browser, path[1]]})
+    try:
+        if type(result['exitCode']) is not int or result['exitCode'] != 0:
+            raise ValueError
+        payload = json.loads(result['stdout'])
+        if isinstance(payload, dict) and payload.get('cached') is True:
+            print('Matching Camoufox cache already present on Maritime /data', flush=True)
+            return
+        available = payload['available_kib']
+        if type(available) is not int or available < 0:
+            raise ValueError
+    except (KeyError, TypeError, ValueError):
+        raise RuntimeError('Unable to verify Camoufox capacity on Maritime /data') from None
+    required = int(size_kib) + CAPACITY_HEADROOM_KIB
+    if available < required:
+        raise RuntimeError(f'Insufficient Maritime /data space for Camoufox: {available} KiB available, '
+                           f'{required} KiB required (including 64 MiB headroom); main not modified')
+    print(f'Maritime /data capacity verified: {available} KiB available, {required} KiB required', flush=True)
 
 
 class ProbeFailure(RuntimeError):
@@ -211,12 +255,18 @@ def deploy(version, previous_version, rollback=False, *, skip_baseline_inference
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--version', required=True)
-    parser.add_argument('--previous-version', required=True)
+    parser.add_argument('--version')
+    parser.add_argument('--previous-version')
     parser.add_argument('--rollback', action='store_true')
     parser.add_argument('--skip-baseline-inference', action='store_true')
+    parser.add_argument('--check-browser-capacity', nargs=2, metavar=('PATH', 'KIB'))
     args = parser.parse_args()
-    if not all(re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', value) for value in (args.version, args.previous_version)):
+    if args.check_browser_capacity:
+        if args.version is not None or args.previous_version is not None or args.rollback or args.skip_baseline_inference:
+            parser.error('capacity check cannot be combined with deployment arguments')
+        check_browser_capacity(*args.check_browser_capacity)
+        return
+    if not all(value and re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', value) for value in (args.version, args.previous_version)):
         parser.error('invalid version')
     deploy(args.version, args.previous_version, args.rollback, skip_baseline_inference=args.skip_baseline_inference)
 

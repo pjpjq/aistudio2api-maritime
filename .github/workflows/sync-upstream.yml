@@ -87,7 +87,15 @@ jobs:
         run: test -n "$MARITIME_TOKEN"
       - name: Build and smoke-test the candidate
         if: steps.check.outputs.changed == 'true' || inputs.redeploy
+        id: candidate
         run: bash scripts/smoke_image.sh --rollback
+      - name: Check production capacity for the new Camoufox cache
+        if: steps.candidate.outputs.browser_path != ''
+        env:
+          MARITIME_TOKEN: ${{ secrets.MARITIME_TOKEN }}
+          BROWSER_PATH: ${{ steps.candidate.outputs.browser_path }}
+          BROWSER_KIB: ${{ steps.candidate.outputs.browser_kib }}
+        run: python3 scripts/deploy.py --check-browser-capacity "$BROWSER_PATH" "$BROWSER_KIB"
       - name: Persist the validated version in main
         if: steps.check.outputs.changed == 'true' || inputs.redeploy
         id: commit
