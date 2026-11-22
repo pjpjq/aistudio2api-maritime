@@ -16,7 +16,8 @@ REPO = 'https://github.com/pjpjq/aistudio2api-maritime.git'
 BASELINE = Path('.deployment-baseline.json')
 STARTED = Path('.deployment-started')
 TERMINAL = {'success', 'failed', 'error', 'cancelled', 'canceled'}
-MODELS = ('gemini-3.8-flash', 'gemini-4-argon')
+FLASH_MODEL = 'gemini-3.8-flash'
+MODELS = (FLASH_MODEL, 'gemini-4-argon')
 PROBE_ERRORS = {'runtime_key', 'admin_login', 'admin_status', 'admin_logout', 'readiness',
                 'http', 'transport', 'invalid_response', 'marker'}
 CAPACITY_HEADROOM_KIB = 64 * 1024
@@ -182,8 +183,9 @@ def probe(version, inference=True):
     status = remote_probe(version)
     if not inference:
         return status
+    models = (FLASH_MODEL,) if os.environ.get('MARITIME_FLASH_ONLY') == 'true' else MODELS
     failures = []
-    for model in MODELS:
+    for model in models:
         for attempt, delay in enumerate((5, 15, 0), start=1):
             try:
                 status['probes'].append(remote_probe(version, model))

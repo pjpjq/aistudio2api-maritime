@@ -16,6 +16,10 @@ on:
         description: Skip old-version model requests only; candidate checks and rollback stay enabled
         type: boolean
         default: false
+      flash_only:
+        description: Verify version, readiness, and Flash for this manual run
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -53,6 +57,8 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write
+    env:
+      MARITIME_FLASH_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.flash_only }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -114,7 +120,7 @@ jobs:
             test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - name: Deploy main and verify Flash and Argon schema regression
+      - name: Deploy main and verify the live API
         if: steps.commit.outcome == 'success'
         id: deploy
         env:

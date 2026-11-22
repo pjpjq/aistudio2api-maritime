@@ -94,6 +94,15 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(deploy.probe('v0.2.13')['probes'], [flash_ok, argon_ok])
         self.assertEqual(sleep.call_args_list, [call(8), call(15)])
 
+    @patch.dict(deploy.os.environ, {'MARITIME_FLASH_ONLY': 'true'})
+    @patch.object(deploy, 'remote_probe')
+    def test_manual_flash_only_still_checks_runtime_and_flash(self, check):
+        flash = 'gemini-3.8-flash'
+        flash_ok = {'model': flash, 'status': 'completed', 'marker': True}
+        check.side_effect = [self.after, flash_ok]
+        self.assertEqual(deploy.probe('v0.2.14')['probes'], [flash_ok])
+        self.assertEqual(check.call_args_list, [call('v0.2.14'), call('v0.2.14', flash)])
+
     @patch.object(deploy.time, 'sleep')
     @patch.object(deploy, 'remote_probe')
     def test_initial_invalid_response_retries_once_but_never_passes_as_a_marker(self, check, sleep):
