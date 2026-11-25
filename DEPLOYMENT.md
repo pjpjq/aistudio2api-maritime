@@ -6,9 +6,8 @@ binary from the version-named directory. The tracked legacy binary is not used.
 
 ## Automatic upstream updates
 
-The Sync AIStudio2API upstream GitHub Actions workflow wakes hourly at minute
-17 (UTC) and checks releases at least five hours after its last successful check,
-matching daili's interval gate. Manual runs bypass the gate; redeploy=true
+The Sync AIStudio2API upstream GitHub Actions workflow checks releases at minute
+17 of every hour (UTC) and on manual runs. A manual run with `redeploy=true`
 rebuilds and verifies main even when no new version exists.
 
 The repository secret MARITIME_TOKEN must authorize agent
@@ -27,12 +26,11 @@ auth path and API key fingerprint must remain unchanged.
 On failure it reverts its own version commit and redeploys the previous version,
 then performs the same inference checks. It will not overwrite a concurrently
 changed main. An ambiguous deployment POST is not retried; rollback waits for
-in-flight deployments first. A failed check is not cached as successful.
+in-flight deployments first.
 
 The updater fails closed if the release format/checksum changes or upstream
 requires a different Camoufox version; update image compatibility manually before
-retrying. GitHub schedule delivery may be delayed, and cache eviction may cause
-an earlier extra check, not an unnecessary redeployment.
+retrying. GitHub schedule delivery may be delayed.
 
 ## Verification
 

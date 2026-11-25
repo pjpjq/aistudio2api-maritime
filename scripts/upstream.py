@@ -2,10 +2,8 @@
 
 import argparse
 import json
-import math
 import os
 import re
-import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -109,26 +107,11 @@ def check():
     emit({'changed': changed, 'version': version, 'previous_version': previous})
 
 
-def gate(state, force):
-    now = time.time()
-    last = float(state.read_text()) if state.exists() else 0
-    if not math.isfinite(last) or last < 0 or last > now:
-        raise RuntimeError('invalid or future successful-check timestamp')
-    emit({'due': force or now - last >= 18000})
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('check', 'gate', 'record'))
-    parser.add_argument('--state-path', type=Path, default=Path('.upstream-check-state'))
-    parser.add_argument('--force', action='store_true')
-    args = parser.parse_args()
-    if args.command == 'check':
-        check()
-    elif args.command == 'gate':
-        gate(args.state_path, args.force)
-    else:
-        args.state_path.write_text(str(time.time()))
+    parser.add_argument('command', choices=('check',))
+    parser.parse_args()
+    check()
 
 
 if __name__ == '__main__':

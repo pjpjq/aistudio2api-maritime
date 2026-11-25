@@ -189,18 +189,5 @@ class UpstreamTests(unittest.TestCase):
             self.command('check')
         self.assertEqual(self.docker.read_text(), DOCKERFILE)
 
-    def test_gate_record_and_force(self):
-        self.assertEqual(self.command('gate')['due'], 'true')
-        self.command('record')
-        self.assertEqual(self.command('gate')['due'], 'false')
-        self.assertEqual(self.command('gate', '--force')['due'], 'true')
-        self.assertEqual(self.calls, [])
-
-    def test_corrupt_state_fails_closed(self):
-        Path('.upstream-check-state').write_text('bad timestamp')
-        with self.assertRaises((RuntimeError, ValueError)):
-            self.command('gate')
-
-
 if __name__ == '__main__':
     unittest.main()
