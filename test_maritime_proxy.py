@@ -167,7 +167,7 @@ class DeploymentLoginTests(unittest.TestCase):
                 opener = Mock()
                 opener.open.side_effect = [io.BytesIO(), response, io.BytesIO()] if enabled else [response]
                 with patch("pathlib.Path.iterdir", return_value=[process]), patch("urllib.request.build_opener", return_value=opener), patch("builtins.print") as output:
-                    exec(deploy.PROBE, {"EXPECTED": "v0.3.2", "INFERENCE": False, "PUBLIC": "https://console.example.test"})
+                    exec(deploy.PROBE, {"EXPECTED": "v0.3.2", "MODEL": None, "PUBLIC": "https://console.example.test"})
                 self.assertTrue(json.loads(output.call_args.args[0])["ready"])
                 calls = opener.open.call_args_list
                 self.assertEqual(len(calls), 3 if enabled else 1)
